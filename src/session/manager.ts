@@ -5,6 +5,7 @@
  * for maintaining conversation context across requests.
  *
  * Phase 3b: Session resume failure tracking — auto-invalidate after consecutive failures
+ * Phase 5d: Track session context size for token counting
  */
 import { v4 as uuidv4 } from "uuid";
 import fs from "fs/promises";
@@ -202,6 +203,18 @@ class SessionManager {
 
   getAll(): SessionMapping[] {
     return Array.from(this.sessions.values());
+  }
+
+  /**
+   * Phase 5d: Get estimated context size (in tokens) for a session.
+   * Estimates based on task count * avg tokens per task.
+   * Rough estimate: ~1000 tokens per prior exchange (Q&A pair).
+   */
+  getContextSizeEstimate(clawdbotId: string): number {
+    const session = this.sessions.get(clawdbotId);
+    if (!session || !session.taskCount) return 0;
+    const AVG_TOKENS_PER_TASK = 1000;
+    return Math.max(0, (session.taskCount - 1) * AVG_TOKENS_PER_TASK);
   }
 
   get size(): number {

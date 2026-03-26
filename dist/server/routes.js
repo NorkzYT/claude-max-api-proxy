@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { ClaudeSubprocess, subprocessRegistry } from "../subprocess/manager.js";
 import { openaiToCli } from "../adapter/openai-to-cli.js";
-import { cliResultToOpenai, createDoneChunk } from "../adapter/cli-to-openai.js";
+import { cliResultToOpenai, createDoneChunk, estimateTokens, validateTokens } from "../adapter/cli-to-openai.js";
 import { sessionManager } from "../session/manager.js";
 import { conversationStore } from "../store/conversation.js";
 import { subprocessPool } from "../subprocess/pool.js";
@@ -11,6 +11,7 @@ const conversationQueues = new Map();
 /**
  * Enqueue a request for a conversation and process sequentially.
  * Phase 3a: Wraps handler with an absolute queue timeout.
+ * Phase 5a: Scale timeout buffer based on queue depth to prevent stacking timeouts
  */
 function enqueueRequest(conversationId, handler, hardTimeoutMs) {
     return new Promise((resolve, reject) => {
@@ -19,7 +20,10 @@ function enqueueRequest(conversationId, handler, hardTimeoutMs) {
             entry = { queue: [], processing: false };
             conversationQueues.set(conversationId, entry);
         }
-        const queueTimeoutMs = hardTimeoutMs + 60000; // hard timeout + 60s buffer
+        // Phase 5a: Scale buffer based on queue position - 60s per item in queue
+        const queuePosition = entry.queue.length;
+        const queueBufferMs = Math.max(60000, queuePosition * 60000);
+        const queueTimeoutMs = hardTimeoutMs + queueBufferMs;
         const item = {
             handler: () => {
                 // Wrap handler in a race with the queue timeout
@@ -169,6 +173,11 @@ export async function handleChatCompletions(req, res) {
     try {
         await enqueueRequest(conversationId, async () => {
             const { sessionId, isResume } = sessionManager.getOrCreate(conversationId, body.model);
+            // Phase 5d: Log session context size for token accounting
+            if (isResume) {
+                const contextSize = sessionManager.getContextSizeEstimate(conversationId);
+                log("session.context", { conversationId, estimatedContextTokens: contextSize, isResume });
+            }
             conversationStore.ensureConversation(conversationId, body.model, sessionId);
             const messages = body.messages;
             const lastUserMsg = messages.filter(m => m.role === "user").pop();
@@ -251,6 +260,7 @@ function runStreamingSubprocess(opts) {
         }, SSE_KEEPALIVE_INTERVAL);
         cleanup.add(() => clearInterval(keepaliveId));
         // Hard timeout (absolute wall clock)
+        // Phase 5b: Only delete session on hard timeout (permanent error), not on stall (transient)
         const hardTimeoutId = setTimeout(() => {
             if (!isComplete) {
                 log("request.timeout", {
@@ -276,6 +286,7 @@ function runStreamingSubprocess(opts) {
         }, hardTimeout);
         cleanup.add(() => clearTimeout(hardTimeoutId));
         // Stall detection (Phase 1a): check periodically if lastActivityAt has gone stale
+        // Phase 5b: Do NOT delete session on stall - it's transient. Only mark as failed for retry logic.
         const stallCheckInterval = setInterval(() => {
             if (isComplete)
                 return;
@@ -291,8 +302,10 @@ function runStreamingSubprocess(opts) {
                     model: cliInput.model,
                 });
                 subprocess.kill();
+                // Phase 5b: Mark as failed for retry (don't delete - it may be recoverable)
                 if (cliInput._conversationId) {
-                    sessionManager.delete(cliInput._conversationId);
+                    sessionManager.markFailed(cliInput._conversationId);
+                    n;
                 }
                 if (!clientDisconnected && !res.writableEnded) {
                     res.write(`data: ${JSON.stringify({
@@ -364,11 +377,45 @@ function runStreamingSubprocess(opts) {
         });
         subprocess.on("result", (result) => {
             lastActivityAt = Date.now();
-            const usageData = result?.usage ? {
-                prompt_tokens: result.usage.input_tokens || 0,
-                completion_tokens: result.usage.output_tokens || 0,
-                total_tokens: (result.usage.input_tokens || 0) + (result.usage.output_tokens || 0),
-            } : null;
+            // Phase 5c: Token validation and estimate fallback
+            let usageData = null;
+            if (result?.usage) {
+                const promptTokens = result.usage.input_tokens || 0;
+                const completionTokens = result.usage.output_tokens || 0;
+                const validation = validateTokens(promptTokens, completionTokens, fullResponse.length);
+                if (!validation.valid) {
+                    log("token.validation_failed", {
+                        requestId,
+                        reason: validation.reason,
+                        promptTokens,
+                        completionTokens,
+                        contentLength: fullResponse.length,
+                    });
+                    // Estimate tokens as fallback
+                    const estimatedCompletion = estimateTokens(fullResponse);
+                    usageData = {
+                        prompt_tokens: promptTokens || 0,
+                        completion_tokens: estimatedCompletion,
+                        total_tokens: promptTokens + estimatedCompletion,
+                    };
+                }
+                else {
+                    usageData = {
+                        prompt_tokens: promptTokens,
+                        completion_tokens: completionTokens,
+                        total_tokens: promptTokens + completionTokens,
+                    };
+                }
+            }
+            else if (fullResponse.length > 0) {
+                // Phase 5c: Estimate tokens if not provided
+                const estimatedCompletion = estimateTokens(fullResponse);
+                usageData = {
+                    prompt_tokens: 0,
+                    completion_tokens: estimatedCompletion,
+                    total_tokens: estimatedCompletion,
+                };
+            }
             try {
                 if (fullResponse && cliInput._conversationId) {
                     conversationStore.addMessage(cliInput._conversationId, "assistant", fullResponse);

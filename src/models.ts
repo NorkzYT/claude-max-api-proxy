@@ -31,12 +31,12 @@ const MODEL_DEFINITIONS: ModelDefinition[] = [
   { id: "claude-opus-4",   family: "opus",   alias: "opus",   timeoutMs: 1800000, stallTimeoutMs: 120000 },
   { id: "claude-opus-4-5", family: "opus",   alias: "opus",   timeoutMs: 1800000, stallTimeoutMs: 120000 },
   // Sonnet — current model first
-  { id: "claude-sonnet-4-6", family: "sonnet", alias: "sonnet", timeoutMs: 600000, stallTimeoutMs: 60000 },
-  { id: "claude-sonnet-4",   family: "sonnet", alias: "sonnet", timeoutMs: 600000, stallTimeoutMs: 60000 },
-  { id: "claude-sonnet-4-5", family: "sonnet", alias: "sonnet", timeoutMs: 600000, stallTimeoutMs: 60000 },
+  { id: "claude-sonnet-4-6", family: "sonnet", alias: "sonnet", timeoutMs: 600000, stallTimeoutMs: 90000 },
+  { id: "claude-sonnet-4",   family: "sonnet", alias: "sonnet", timeoutMs: 600000, stallTimeoutMs: 90000 },
+  { id: "claude-sonnet-4-5", family: "sonnet", alias: "sonnet", timeoutMs: 600000, stallTimeoutMs: 90000 },
   // Haiku — current model first
-  { id: "claude-haiku-4-5", family: "haiku", alias: "haiku", timeoutMs: 120000, stallTimeoutMs: 30000 },
-  { id: "claude-haiku-4",   family: "haiku", alias: "haiku", timeoutMs: 120000, stallTimeoutMs: 30000 },
+  { id: "claude-haiku-4-5", family: "haiku", alias: "haiku", timeoutMs: 120000, stallTimeoutMs: 45000 },
+  { id: "claude-haiku-4",   family: "haiku", alias: "haiku", timeoutMs: 120000, stallTimeoutMs: 45000 },
 ];
 
 // Provider prefixes that clients may prepend
@@ -112,10 +112,10 @@ export function getStallTimeout(model: string): number {
 
   const lower = (model || "").toLowerCase();
   if (lower.includes("opus"))   return 120000;
-  if (lower.includes("haiku"))  return 30000;
-  if (lower.includes("sonnet")) return 60000;
+  if (lower.includes("haiku"))  return 45000;
+  if (lower.includes("sonnet")) return 90000;
 
-  return 60000;
+  return 90000;
 }
 
 /**

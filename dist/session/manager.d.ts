@@ -45,6 +45,12 @@ declare class SessionManager {
     };
     cleanup(): number;
     getAll(): SessionMapping[];
+    /**
+     * Phase 5d: Get estimated context size (in tokens) for a session.
+     * Estimates based on task count * avg tokens per task.
+     * Rough estimate: ~1000 tokens per prior exchange (Q&A pair).
+     */
+    getContextSizeEstimate(clawdbotId: string): number;
     get size(): number;
 }
 export declare const sessionManager: SessionManager;
