@@ -196,6 +196,14 @@ export async function verifyAuth() {
     }
     return { ok: true, status };
 }
+// Probe timeout is set generously because startup probes run ALL candidate
+// models in parallel (model-availability.ts uses Promise.all). A single probe
+// takes ~8s on a warm CLI in isolation, but under parallel contention — and
+// especially on cold-boot when the CLI itself is warming up auth — the wall
+// clock can easily exceed 15s, causing the whole probe to SIGTERM out and
+// leaving /health.models.available empty even though the underlying CLI is
+// perfectly healthy. 60s gives real-world probes plenty of headroom while
+// still bounding worst-case startup latency.
 export async function probeModelAvailability(model) {
     const result = await runClaudeCommand([
         "--print",
@@ -204,7 +212,7 @@ export async function probeModelAvailability(model) {
         "--model",
         model,
         PROBE_PROMPT,
-    ], 15000);
+    ], 60000);
     const messages = parseClaudeJsonOutput(result.stdout);
     const error = extractClaudeErrorFromMessages(messages);
     if (error) {
