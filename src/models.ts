@@ -43,6 +43,8 @@ const MODEL_DEFINITIONS: ModelDefinition[] = [
 const PROVIDER_PREFIXES = ["maxproxy/", "claude-code-cli/"];
 
 interface ModelLookupEntry {
+  id: string;
+  family: ModelFamily;
   alias: string;
   timeoutMs: number;
   stallTimeoutMs: number;
@@ -52,7 +54,13 @@ interface ModelLookupEntry {
 const MODEL_LOOKUP = new Map<string, ModelLookupEntry>();
 
 for (const def of MODEL_DEFINITIONS) {
-  const entry: ModelLookupEntry = { alias: def.alias, timeoutMs: def.timeoutMs, stallTimeoutMs: def.stallTimeoutMs };
+  const entry: ModelLookupEntry = {
+    id: def.id,
+    family: def.family,
+    alias: def.alias,
+    timeoutMs: def.timeoutMs,
+    stallTimeoutMs: def.stallTimeoutMs,
+  };
   MODEL_LOOKUP.set(def.id, entry);
   for (const prefix of PROVIDER_PREFIXES) {
     MODEL_LOOKUP.set(prefix + def.id, entry);
@@ -63,7 +71,13 @@ for (const def of MODEL_DEFINITIONS) {
 for (const family of ["opus", "sonnet", "haiku"] as const) {
   const def = MODEL_DEFINITIONS.find(d => d.family === family);
   if (def) {
-    MODEL_LOOKUP.set(family, { alias: def.alias, timeoutMs: def.timeoutMs, stallTimeoutMs: def.stallTimeoutMs });
+    MODEL_LOOKUP.set(family, {
+      id: def.id,
+      family: def.family,
+      alias: def.alias,
+      timeoutMs: def.timeoutMs,
+      stallTimeoutMs: def.stallTimeoutMs,
+    });
   }
 }
 
@@ -80,6 +94,24 @@ export function resolveModel(model: string): string | null {
       const stripped = model.slice(prefix.length);
       const e = MODEL_LOOKUP.get(stripped);
       if (e) return e.alias;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Resolve a request model string to its model family.
+ */
+export function resolveModelFamily(model: string): ModelFamily | null {
+  const entry = MODEL_LOOKUP.get(model);
+  if (entry) return entry.family;
+
+  for (const prefix of PROVIDER_PREFIXES) {
+    if (model.startsWith(prefix)) {
+      const stripped = model.slice(prefix.length);
+      const e = MODEL_LOOKUP.get(stripped);
+      if (e) return e.family;
     }
   }
 
@@ -148,11 +180,19 @@ export function normalizeModelName(model: string): string {
 /**
  * Get the OpenAI-compatible /v1/models response data.
  */
-export function getModelList(): Array<{ id: string; object: string; owned_by: string; created: number }> {
-  return MODEL_DEFINITIONS.map(def => ({
+export function getModelList(definitions: ModelDefinition[] = MODEL_DEFINITIONS): Array<{ id: string; object: string; owned_by: string; created: number }> {
+  return definitions.map(def => ({
     id: def.id,
     object: "model" as const,
     owned_by: "anthropic",
     created: Math.floor(Date.now() / 1000),
   }));
+}
+
+export function getModelDefinitions(): ModelDefinition[] {
+  return [...MODEL_DEFINITIONS];
+}
+
+export function getCanonicalModelId(family: ModelFamily): string {
+  return CANONICAL_IDS[family]!;
 }

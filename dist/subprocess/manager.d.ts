@@ -50,20 +50,5 @@ export declare class ClaudeSubprocess extends EventEmitter {
     isRunning(): boolean;
     getPid(): number | null;
 }
-/**
- * Verify that Claude CLI is installed and accessible
- */
-export declare function verifyClaude(): Promise<{
-    ok: boolean;
-    error?: string;
-    version?: string;
-}>;
-/**
- * Check if Claude CLI is authenticated
- */
-export declare function verifyAuth(): Promise<{
-    ok: boolean;
-    error?: string;
-}>;
-export {};
+export { verifyClaude, verifyAuth } from "../claude-cli.inspect.js";
 //# sourceMappingURL=manager.d.ts.map

@@ -23,18 +23,23 @@ import { ClaudeSubprocess, subprocessRegistry } from "../subprocess/manager.js";
 import { openaiToCli } from "../adapter/openai-to-cli.js";
 import type { CliInput } from "../adapter/openai-to-cli.js";
 import { cliResultToOpenai, createDoneChunk, estimateTokens, validateTokens } from "../adapter/cli-to-openai.js";
+import { extractTextContent } from "../adapter/cli-to-openai.js";
 import { sessionManager } from "../session/manager.js";
 import { conversationStore } from "../store/conversation.js";
 import { subprocessPool } from "../subprocess/pool.js";
-import { getModelTimeout, getStallTimeout, isValidModel, getModelList } from "../models.js";
+import { getModelTimeout, getStallTimeout, isValidModel } from "../models.js";
 import { log, logError } from "../logger.js";
-import type { ClaudeCliResult, ClaudeCliStreamEvent } from "../types/claude-cli.js";
+import { modelAvailability } from "../model-availability.js";
+import { extractClaudeErrorFromResult, type ClaudeProxyError } from "../claude-cli.inspect.js";
+import type { ClaudeCliAssistant, ClaudeCliResult, ClaudeCliStreamEvent } from "../types/claude-cli.js";
+import { runtimeConfig } from "../config.js";
 
 // ---------------------------------------------------------------------------
 // Queue infrastructure
 // ---------------------------------------------------------------------------
 
 interface QueueItem {
+  requestId: string;
   handler: () => Promise<void>;
   resolve: (value: void) => void;
   reject: (reason: unknown) => void;
@@ -48,12 +53,29 @@ interface QueueEntry {
 
 const conversationQueues = new Map<string, QueueEntry>();
 
+interface ActiveRequestEntry {
+  requestId: string;
+  startedAt: number;
+  stream: boolean;
+  cancel?: (error: ClaudeProxyError) => void;
+  pendingCancel?: ClaudeProxyError;
+}
+
+const activeRequests = new Map<string, ActiveRequestEntry>();
+
+class RequestCancelledError extends Error {
+  constructor(public readonly proxyError: ClaudeProxyError) {
+    super(proxyError.message);
+    this.name = "RequestCancelledError";
+  }
+}
+
 /**
  * Enqueue a request for a conversation and process sequentially.
  * Phase 3a: Wraps handler with an absolute queue timeout.
  * Phase 5a: Scale timeout buffer based on queue depth to prevent stacking timeouts
  */
-function enqueueRequest(conversationId: string, handler: () => Promise<void>, hardTimeoutMs: number): Promise<void> {
+function enqueueRequest(conversationId: string, requestId: string, handler: () => Promise<void>, hardTimeoutMs: number): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     let entry = conversationQueues.get(conversationId);
     if (!entry) {
@@ -67,6 +89,7 @@ function enqueueRequest(conversationId: string, handler: () => Promise<void>, ha
     const queueTimeoutMs = hardTimeoutMs + queueBufferMs;
 
     const item: QueueItem = {
+      requestId,
       handler: () => {
         // Wrap handler in a race with the queue timeout
         return new Promise<void>((handlerResolve, handlerReject) => {
@@ -93,6 +116,13 @@ function enqueueRequest(conversationId: string, handler: () => Promise<void>, ha
 
     entry.queue.push(item);
     log("queue.enqueue", { conversationId, depth: entry.queue.length });
+    logQueueDebug("queue.enqueue", {
+      conversationId,
+      requestId,
+      depth: entry.queue.length,
+      processing: entry.processing,
+      policy: runtimeConfig.sameConversationPolicy,
+    });
 
     if (!entry.processing) {
       processQueue(conversationId);
@@ -162,13 +192,158 @@ class CleanupSet {
 // ---------------------------------------------------------------------------
 
 const SSE_KEEPALIVE_INTERVAL = 5000;
-const DISCONNECT_GRACE_MS = 60000;
 
 // ---------------------------------------------------------------------------
 // Stall detection stats (Phase 4b)
 // ---------------------------------------------------------------------------
 
 let stallDetections = 0;
+
+function sendJsonError(res: Response, error: ClaudeProxyError): void {
+  res.status(error.status).json({
+    error: {
+      message: error.message,
+      type: error.type,
+      code: error.code,
+    },
+  });
+}
+
+function startStreamingResponse(res: Response, requestId: string): void {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Request-Id", requestId);
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  res.write(":ok\n\n");
+}
+
+function writeStreamingError(res: Response, error: ClaudeProxyError): void {
+  if (res.writableEnded) return;
+  res.write(`data: ${JSON.stringify({
+    error: {
+      message: error.message,
+      type: error.type,
+      code: error.code,
+    },
+  })}\n\n`);
+  res.write("data: [DONE]\n\n");
+  res.end();
+}
+
+function respondWithError(res: Response, error: ClaudeProxyError, stream: boolean, requestId: string): void {
+  if (res.writableEnded) return;
+
+  if (stream) {
+    if (!res.headersSent) {
+      startStreamingResponse(res, requestId);
+    }
+    writeStreamingError(res, error);
+    return;
+  }
+
+  if (!res.headersSent) {
+    sendJsonError(res, error);
+  }
+}
+
+function logQueueDebug(event: "queue.enqueue" | "queue.drop" | "queue.blocked" | "request.cancel", fields: Record<string, unknown>): void {
+  if (!runtimeConfig.debugQueues) return;
+  log(event, fields);
+}
+
+function createSupersededError(conversationId: string, supersedingRequestId: string): ClaudeProxyError {
+  return {
+    status: 409,
+    type: "invalid_request_error",
+    code: "request_superseded",
+    message: `Request for conversation '${conversationId}' was superseded by a newer message (${supersedingRequestId}).`,
+  };
+}
+
+function clearQueuedRequests(conversationId: string, supersedingRequestId: string): void {
+  const entry = conversationQueues.get(conversationId);
+  if (!entry || entry.queue.length === 0) return;
+
+  const staleItems = entry.queue.splice(0);
+  for (const item of staleItems) {
+    log("queue.drop", {
+      conversationId,
+      requestId: item.requestId,
+      reason: "superseded_by_newer_request",
+      supersedingRequestId,
+    });
+    logQueueDebug("queue.drop", {
+      conversationId,
+      requestId: item.requestId,
+      reason: "superseded_by_newer_request",
+      supersedingRequestId,
+      droppedQueuedRequests: staleItems.length,
+    });
+    item.reject(new RequestCancelledError(createSupersededError(conversationId, supersedingRequestId)));
+  }
+}
+
+function supersedeActiveRequest(conversationId: string, supersedingRequestId: string): void {
+  const active = activeRequests.get(conversationId);
+  if (!active || active.requestId === supersedingRequestId) return;
+
+  const error = createSupersededError(conversationId, supersedingRequestId);
+  log("request.cancel", {
+    conversationId,
+    requestId: active.requestId,
+    reason: "superseded_by_newer_request",
+    supersedingRequestId,
+  });
+  logQueueDebug("request.cancel", {
+    conversationId,
+    requestId: active.requestId,
+    supersedingRequestId,
+    reason: "superseded_by_newer_request",
+    startedAt: active.startedAt,
+    stream: active.stream,
+  });
+
+  if (active.cancel) {
+    active.cancel(error);
+  } else {
+    active.pendingCancel = error;
+  }
+}
+
+function registerActiveRequest(
+  conversationId: string,
+  requestId: string,
+  stream: boolean,
+): {
+  setCancel: (cancel: (error: ClaudeProxyError) => void) => void;
+  clear: () => void;
+} {
+  const entry: ActiveRequestEntry = {
+    requestId,
+    startedAt: Date.now(),
+    stream,
+  };
+  activeRequests.set(conversationId, entry);
+
+  return {
+    setCancel(cancel: (error: ClaudeProxyError) => void): void {
+      entry.cancel = cancel;
+      if (entry.pendingCancel) {
+        const pending = entry.pendingCancel;
+        entry.pendingCancel = undefined;
+        cancel(pending);
+      }
+    },
+    clear(): void {
+      const current = activeRequests.get(conversationId);
+      if (current === entry) {
+        activeRequests.delete(conversationId);
+      }
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Main handler
@@ -178,6 +353,7 @@ export async function handleChatCompletions(req: Request, res: Response): Promis
   const requestId = uuidv4().replace(/-/g, "").slice(0, 24);
   const body = req.body as Record<string, unknown>;
   const stream = body.stream === true;
+  const requestedModel = body.model ? String(body.model) : undefined;
 
   if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
     res.status(400).json({
@@ -190,10 +366,10 @@ export async function handleChatCompletions(req: Request, res: Response): Promis
     return;
   }
 
-  if (body.model && !isValidModel(body.model as string)) {
+  if (requestedModel && !isValidModel(requestedModel)) {
     res.status(400).json({
       error: {
-        message: `Model '${body.model}' is not supported. Use GET /v1/models for available models.`,
+        message: `Model '${requestedModel}' is not supported. Use GET /v1/models for available models.`,
         type: "invalid_request_error",
         code: "model_not_found",
       },
@@ -201,14 +377,49 @@ export async function handleChatCompletions(req: Request, res: Response): Promis
     return;
   }
 
-  const startTime = Date.now();
+  const availability = await modelAvailability.getSnapshot();
+  if (availability.available.length === 0) {
+    sendJsonError(res, {
+      status: 503,
+      type: "server_error",
+      code: "no_models_available",
+      message: availability.unavailable[0]?.error.message || "No Claude models are currently accessible via Claude CLI.",
+    });
+    return;
+  }
+
+  const resolvedModel = await modelAvailability.resolveRequestedModel(requestedModel);
+  if (!resolvedModel) {
+    sendJsonError(res, {
+      status: 503,
+      type: "server_error",
+      code: "model_unavailable",
+      message: requestedModel
+        ? `Model '${requestedModel}' is not currently available to this Claude CLI account. Use GET /v1/models to see accessible models.`
+        : "No default Claude model is currently available.",
+    });
+    return;
+  }
+
   const conversationId = (body.user as string) || requestId;
+  if (runtimeConfig.sameConversationPolicy === "latest-wins") {
+    clearQueuedRequests(conversationId, requestId);
+    supersedeActiveRequest(conversationId, requestId);
+  }
+
+  const startTime = Date.now();
   const queueEntry = conversationQueues.get(conversationId);
   const queueDepth = queueEntry ? queueEntry.queue.length : 0;
 
   const MAX_QUEUE_DEPTH = 5;
   if (queueDepth >= MAX_QUEUE_DEPTH) {
     log("queue.blocked", { conversationId, depth: queueDepth });
+    logQueueDebug("queue.blocked", {
+      conversationId,
+      requestId,
+      depth: queueDepth,
+      policy: runtimeConfig.sameConversationPolicy,
+    });
     res.status(429).json({
       error: {
         message: `Too many queued requests for this conversation (${queueDepth}). Please wait for current requests to complete.`,
@@ -221,54 +432,61 @@ export async function handleChatCompletions(req: Request, res: Response): Promis
 
   // Compute hard timeout for queue wrapper
   const thinking = body.thinking as { type?: string; budget_tokens?: number } | undefined;
-  const tempModel = body.model ? String(body.model) : "sonnet";
+  const tempModel = requestedModel || resolvedModel.id;
   const baseTimeout = getModelTimeout(tempModel);
   const hardTimeout = (thinking?.type === "enabled" && thinking.budget_tokens) ? baseTimeout * 3 : baseTimeout;
 
   log("request.start", { requestId, conversationId, model: tempModel, stream, queueDepth });
 
   try {
-    await enqueueRequest(conversationId, async () => {
-      const { sessionId, isResume } = sessionManager.getOrCreate(conversationId, body.model as string);
+    await enqueueRequest(conversationId, requestId, async () => {
+      const activeRequest = registerActiveRequest(conversationId, requestId, stream);
+      try {
+        const { sessionId, isResume } = sessionManager.getOrCreate(conversationId, resolvedModel.id);
 
-      // Phase 5d: Log session context size for token accounting
-      if (isResume) {
-        const contextSize = sessionManager.getContextSizeEstimate(conversationId);
-        log("session.context", { conversationId, estimatedContextTokens: contextSize, isResume });
-      }
+        // Phase 5d: Log session context size for token accounting
+        if (isResume) {
+          const contextSize = sessionManager.getContextSizeEstimate(conversationId);
+          log("session.context", { conversationId, estimatedContextTokens: contextSize, isResume });
+        }
 
-      conversationStore.ensureConversation(conversationId, body.model as string, sessionId);
-      const messages = body.messages as Array<{ role: string; content: string }>;
-      const lastUserMsg = messages.filter(m => m.role === "user").pop();
-      if (lastUserMsg) {
-        const content = typeof lastUserMsg.content === "string"
-          ? lastUserMsg.content
-          : JSON.stringify(lastUserMsg.content);
-        conversationStore.addMessage(conversationId, "user", content);
-      }
+        conversationStore.ensureConversation(conversationId, resolvedModel.id, sessionId);
+        const messages = body.messages as Array<{ role: string; content: string }>;
+        const lastUserMsg = messages.filter(m => m.role === "user").pop();
+        if (lastUserMsg) {
+          const content = typeof lastUserMsg.content === "string"
+            ? lastUserMsg.content
+            : JSON.stringify(lastUserMsg.content);
+          conversationStore.addMessage(conversationId, "user", content);
+        }
 
-      const cliInput = openaiToCli(body as unknown as Parameters<typeof openaiToCli>[0], isResume);
-      cliInput.sessionId = sessionId;
-      cliInput.isResume = isResume;
-      cliInput._conversationId = conversationId;
-      cliInput._startTime = startTime;
-      if (thinking?.type === "enabled" && thinking.budget_tokens) {
-        cliInput.thinkingBudget = thinking.budget_tokens;
-      }
+        const cliInput = openaiToCli(body as unknown as Parameters<typeof openaiToCli>[0], isResume, resolvedModel.id);
+        cliInput.sessionId = sessionId;
+        cliInput.isResume = isResume;
+        cliInput._conversationId = conversationId;
+        cliInput._startTime = startTime;
+        if (thinking?.type === "enabled" && thinking.budget_tokens) {
+          cliInput.thinkingBudget = thinking.budget_tokens;
+        }
 
-      if (stream) {
-        await handleStreamingResponse(req, res, cliInput, requestId);
-      } else {
-        await handleNonStreamingResponse(res, cliInput, requestId);
+        if (stream) {
+          await handleStreamingResponse(req, res, cliInput, requestId, activeRequest.setCancel);
+        } else {
+          await handleNonStreamingResponse(res, cliInput, requestId, activeRequest.setCancel);
+        }
+      } finally {
+        activeRequest.clear();
       }
     }, hardTimeout);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
     logError("request.error", error, { requestId, conversationId });
+    if (error instanceof RequestCancelledError) {
+      respondWithError(res, error.proxyError, stream, requestId);
+      return;
+    }
     if (!res.headersSent) {
-      res.status(500).json({
-        error: { message, type: "server_error", code: null },
-      });
+      sendJsonError(res, { status: 500, message, type: "server_error", code: null });
     }
   }
 }
@@ -282,6 +500,7 @@ interface StreamOpts {
   requestId: string;
   res: Response;
   onStall: () => void;
+  registerCancel?: (cancel: (error: ClaudeProxyError) => void) => void;
 }
 
 /**
@@ -289,8 +508,8 @@ interface StreamOpts {
  * returns a promise that resolves when the subprocess completes.
  * Eliminates the duplicated event handler wiring from the old retry logic.
  */
-function runStreamingSubprocess(opts: StreamOpts): Promise<{ fullResponse: string; success: boolean }> {
-  const { cliInput, requestId, res, onStall } = opts;
+function runStreamingSubprocess(opts: StreamOpts): Promise<{ fullResponse: string; success: boolean; cancelled: boolean }> {
+  const { cliInput, requestId, res, onStall, registerCancel } = opts;
 
   const baseTimeout = getModelTimeout(cliInput.model);
   const hardTimeout = cliInput.thinkingBudget ? baseTimeout * 3 : baseTimeout;
@@ -298,7 +517,7 @@ function runStreamingSubprocess(opts: StreamOpts): Promise<{ fullResponse: strin
     ? getStallTimeout(cliInput.model) * 3  // thinking blocks can take a long time before first text
     : getStallTimeout(cliInput.model);
 
-  return new Promise<{ fullResponse: string; success: boolean }>((resolve) => {
+  return new Promise<{ fullResponse: string; success: boolean; cancelled: boolean }>((resolve) => {
     const subprocess = new ClaudeSubprocess();
     const cleanup = new CleanupSet();
 
@@ -307,6 +526,8 @@ function runStreamingSubprocess(opts: StreamOpts): Promise<{ fullResponse: strin
     let isComplete = false;
     let fullResponse = "";
     let clientDisconnected = false;
+    let lastAssistantText = "";
+    let lastAssistantError: string | undefined;
     let lastActivityAt = Date.now();
     const spawnTime = Date.now();
     let firstByteTime = 0;
@@ -321,11 +542,11 @@ function runStreamingSubprocess(opts: StreamOpts): Promise<{ fullResponse: strin
       return `data: {"id":"${chunkId}","object":"chat.completion.chunk","created":${ts},"model":"${model}","choices":[{"index":0,"delta":{"content":${escaped}},"finish_reason":null}]}\n\n`;
     };
 
-    const finish = (success: boolean): void => {
+    const finish = (success: boolean, cancelled = false): void => {
       if (isComplete) return;
       isComplete = true;
       cleanup.runAll();
-      resolve({ fullResponse, success });
+      resolve({ fullResponse, success, cancelled });
     };
 
     // SSE keepalive
@@ -396,27 +617,37 @@ function runStreamingSubprocess(opts: StreamOpts): Promise<{ fullResponse: strin
     }, Math.min(stallTimeout / 2, 10000));
     cleanup.add(() => clearInterval(stallCheckInterval));
 
-    // Client disconnect with grace period
+    registerCancel?.((error: ClaudeProxyError) => {
+      if (isComplete) return;
+      log("subprocess.kill", {
+        requestId,
+        conversationId: cliInput._conversationId,
+        pid: subprocess.getPid(),
+        reason: error.code || "cancelled",
+      });
+      if (!res.writableEnded) {
+        respondWithError(res, error, true, requestId);
+      }
+      subprocess.kill();
+      finish(false, true);
+    });
+
+    // Client disconnect
     const onClose = (): void => {
       clientDisconnected = true;
       if (isComplete) return;
-      const disconnectTimeout = setTimeout(() => {
-        if (!isComplete) {
-          log("subprocess.kill", {
-            requestId,
-            pid: subprocess.getPid(),
-            reason: "client_disconnect_grace_expired",
-          });
-          subprocess.kill();
-          if (fullResponse && cliInput._conversationId) {
-            try {
-              conversationStore.addMessage(cliInput._conversationId, "assistant", fullResponse + "\n\n[Response truncated — client disconnected]");
-            } catch (e) { console.error("[Routes] Store error:", e); }
-          }
-          finish(false);
-        }
-      }, DISCONNECT_GRACE_MS);
-      cleanup.add(() => clearTimeout(disconnectTimeout));
+      log("subprocess.kill", {
+        requestId,
+        pid: subprocess.getPid(),
+        reason: "client_disconnected",
+      });
+      subprocess.kill();
+      if (fullResponse && cliInput._conversationId) {
+        try {
+          conversationStore.addMessage(cliInput._conversationId, "assistant", fullResponse + "\n\n[Response truncated — client disconnected]");
+        } catch (e) { console.error("[Routes] Store error:", e); }
+      }
+      finish(false, true);
     };
     res.on("close", onClose);
     cleanup.add(() => res.removeListener("close", onClose));
@@ -445,13 +676,38 @@ function runStreamingSubprocess(opts: StreamOpts): Promise<{ fullResponse: strin
       }
     });
 
-    subprocess.on("assistant", (message) => {
+    subprocess.on("assistant", (message: ClaudeCliAssistant) => {
       lastActivityAt = Date.now();
       lastModel = message.message.model;
+      lastAssistantText = extractTextContent(message);
+      lastAssistantError = message.error;
     });
 
     subprocess.on("result", (result: ClaudeCliResult) => {
       lastActivityAt = Date.now();
+
+      const cliError = extractClaudeErrorFromResult(result, lastAssistantText, lastAssistantError);
+      if (cliError) {
+        log("request.error", { requestId, conversationId: cliInput._conversationId, reason: cliError.message });
+        if (cliInput._conversationId && cliInput.isResume) {
+          sessionManager.markFailed(cliInput._conversationId);
+        }
+        try {
+          conversationStore.recordMetric("request_error", {
+            conversationId: cliInput._conversationId,
+            durationMs: Date.now() - (cliInput._startTime || Date.now()),
+            success: false,
+            error: cliError.message,
+            clientDisconnected,
+          });
+        } catch (e) { console.error("[Routes] Metric error:", e); }
+
+        if (!clientDisconnected && !res.writableEnded) {
+          writeStreamingError(res, cliError);
+        }
+        finish(false);
+        return;
+      }
 
       // Phase 5c: Token validation and estimate fallback
       let usageData = null;
@@ -597,20 +853,21 @@ function runStreamingSubprocess(opts: StreamOpts): Promise<{ fullResponse: strin
 // Streaming handler
 // ---------------------------------------------------------------------------
 
-async function handleStreamingResponse(req: Request, res: Response, cliInput: CliInput, requestId: string): Promise<void> {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
-  res.setHeader("X-Request-Id", requestId);
-  res.setHeader("X-Accel-Buffering", "no");
-  res.flushHeaders();
-  res.write(":ok\n\n");
+async function handleStreamingResponse(
+  req: Request,
+  res: Response,
+  cliInput: CliInput,
+  requestId: string,
+  registerCancel?: (cancel: (error: ClaudeProxyError) => void) => void,
+): Promise<void> {
+  startStreamingResponse(res, requestId);
 
   // First attempt
   const result = await runStreamingSubprocess({
     cliInput,
     requestId,
     res,
+    registerCancel,
     onStall: () => {
       if (cliInput._conversationId) {
         sessionManager.markFailed(cliInput._conversationId);
@@ -618,7 +875,7 @@ async function handleStreamingResponse(req: Request, res: Response, cliInput: Cl
     },
   });
 
-  if (result.success) return;
+  if (result.success || result.cancelled) return;
 
   // Retry once on failure (Phase 2a: clean retry without duplicated handlers)
   if (!res.writableEnded) {
@@ -640,6 +897,7 @@ async function handleStreamingResponse(req: Request, res: Response, cliInput: Cl
       cliInput: retryCli,
       requestId,
       res,
+      registerCancel,
       onStall: () => {
         if (cliInput._conversationId) {
           sessionManager.markFailed(cliInput._conversationId);
@@ -653,7 +911,12 @@ async function handleStreamingResponse(req: Request, res: Response, cliInput: Cl
 // Non-streaming handler
 // ---------------------------------------------------------------------------
 
-async function handleNonStreamingResponse(res: Response, cliInput: CliInput, requestId: string): Promise<void> {
+async function handleNonStreamingResponse(
+  res: Response,
+  cliInput: CliInput,
+  requestId: string,
+  registerCancel?: (cancel: (error: ClaudeProxyError) => void) => void,
+): Promise<void> {
   const baseTimeout = getModelTimeout(cliInput.model);
   const timeout = cliInput.thinkingBudget ? baseTimeout * 3 : baseTimeout;
 
@@ -661,7 +924,24 @@ async function handleNonStreamingResponse(res: Response, cliInput: CliInput, req
     const subprocess = new ClaudeSubprocess();
     const cleanup = new CleanupSet();
     let finalResult: ClaudeCliResult | null = null;
+    let lastAssistantText = "";
+    let lastAssistantError: string | undefined;
     let isComplete = false;
+
+    registerCancel?.((error: ClaudeProxyError) => {
+      if (isComplete) return;
+      log("subprocess.kill", {
+        requestId,
+        conversationId: cliInput._conversationId,
+        pid: subprocess.getPid(),
+        reason: error.code || "cancelled",
+      });
+      subprocess.kill();
+      isComplete = true;
+      cleanup.runAll();
+      respondWithError(res, error, false, requestId);
+      resolve();
+    });
 
     const timeoutId = setTimeout(() => {
       if (!isComplete) {
@@ -683,6 +963,11 @@ async function handleNonStreamingResponse(res: Response, cliInput: CliInput, req
       finalResult = result;
     });
 
+    subprocess.on("assistant", (message: ClaudeCliAssistant) => {
+      lastAssistantText = extractTextContent(message);
+      lastAssistantError = message.error;
+    });
+
     subprocess.on("error", (error: Error) => {
       isComplete = true;
       cleanup.runAll();
@@ -699,6 +984,29 @@ async function handleNonStreamingResponse(res: Response, cliInput: CliInput, req
       isComplete = true;
       cleanup.runAll();
       if (finalResult) {
+        const cliError = extractClaudeErrorFromResult(finalResult, lastAssistantText, lastAssistantError);
+        if (cliError) {
+          log("request.error", { requestId, conversationId: cliInput._conversationId, reason: cliError.message });
+          try {
+            conversationStore.recordMetric("request_error", {
+              conversationId: cliInput._conversationId,
+              durationMs: Date.now() - (cliInput._startTime || Date.now()),
+              success: false,
+              error: cliError.message,
+            });
+          } catch (e) { console.error("[Routes] Metric error:", e); }
+
+          if (cliInput._conversationId && cliInput.isResume) {
+            sessionManager.markFailed(cliInput._conversationId);
+          }
+
+          if (!res.headersSent) {
+            sendJsonError(res, cliError);
+          }
+          resolve();
+          return;
+        }
+
         try {
           if (finalResult.result && cliInput._conversationId) {
             conversationStore.addMessage(cliInput._conversationId, "assistant", finalResult.result);
@@ -751,10 +1059,11 @@ async function handleNonStreamingResponse(res: Response, cliInput: CliInput, req
 // Models endpoint
 // ---------------------------------------------------------------------------
 
-export function handleModels(_req: Request, res: Response): void {
+export async function handleModels(_req: Request, res: Response): Promise<void> {
+  const data = await modelAvailability.getPublicModelList();
   res.json({
     object: "list",
-    data: getModelList(),
+    data,
   });
 }
 
@@ -762,11 +1071,12 @@ export function handleModels(_req: Request, res: Response): void {
 // Enhanced health endpoint (Phase 4b)
 // ---------------------------------------------------------------------------
 
-export function handleHealth(_req: Request, res: Response): void {
+export async function handleHealth(_req: Request, res: Response): Promise<void> {
   let metrics: Array<Record<string, unknown>> | null = null;
   let storeStats: { conversations: number; messages: number; metrics: number } | null = null;
   let poolStatus: ReturnType<typeof subprocessPool.getStatus> | null = null;
   let recentErrors: Array<Record<string, unknown>> = [];
+  let availability: Awaited<ReturnType<typeof modelAvailability.getSnapshot>> | null = null;
   try {
     metrics = conversationStore.getHealthMetrics(60);
     storeStats = conversationStore.getStats();
@@ -775,6 +1085,9 @@ export function handleHealth(_req: Request, res: Response): void {
   try {
     poolStatus = subprocessPool.getStatus();
   } catch { /* pool not ready */ }
+  try {
+    availability = await modelAvailability.getSnapshot();
+  } catch { /* availability probe failed */ }
 
   // Queue status
   const queueStatus: Record<string, { queued: number; processing: boolean; waitMs?: number }> = {};
@@ -807,6 +1120,20 @@ export function handleHealth(_req: Request, res: Response): void {
       active: activePids.length,
       pids: activePids,
     },
+    config: {
+      sameConversationPolicy: runtimeConfig.sameConversationPolicy,
+      debugQueues: runtimeConfig.debugQueues,
+    },
+    auth: availability?.auth ?? undefined,
+    models: availability ? {
+      checkedAt: new Date(availability.checkedAt).toISOString(),
+      available: availability.available.map((model) => model.id),
+      unavailable: availability.unavailable.map((entry) => ({
+        id: entry.definition.id,
+        code: entry.error.code,
+        message: entry.error.message,
+      })),
+    } : undefined,
     pool: poolStatus,
     store: storeStats,
     metrics,

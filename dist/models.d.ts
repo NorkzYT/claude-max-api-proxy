@@ -20,6 +20,10 @@ export interface ModelDefinition {
  */
 export declare function resolveModel(model: string): string | null;
 /**
+ * Resolve a request model string to its model family.
+ */
+export declare function resolveModelFamily(model: string): ModelFamily | null;
+/**
  * Get timeout for a model string.
  * Falls back to 180s for unknown models.
  */
@@ -40,10 +44,12 @@ export declare function normalizeModelName(model: string): string;
 /**
  * Get the OpenAI-compatible /v1/models response data.
  */
-export declare function getModelList(): Array<{
+export declare function getModelList(definitions?: ModelDefinition[]): Array<{
     id: string;
     object: string;
     owned_by: string;
     created: number;
 }>;
+export declare function getModelDefinitions(): ModelDefinition[];
+export declare function getCanonicalModelId(family: ModelFamily): string;
 //# sourceMappingURL=models.d.ts.map

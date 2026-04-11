@@ -31,7 +31,13 @@ const PROVIDER_PREFIXES = ["maxproxy/", "claude-code-cli/"];
 // Build lookup map: model string -> { alias, timeoutMs, stallTimeoutMs }
 const MODEL_LOOKUP = new Map();
 for (const def of MODEL_DEFINITIONS) {
-    const entry = { alias: def.alias, timeoutMs: def.timeoutMs, stallTimeoutMs: def.stallTimeoutMs };
+    const entry = {
+        id: def.id,
+        family: def.family,
+        alias: def.alias,
+        timeoutMs: def.timeoutMs,
+        stallTimeoutMs: def.stallTimeoutMs,
+    };
     MODEL_LOOKUP.set(def.id, entry);
     for (const prefix of PROVIDER_PREFIXES) {
         MODEL_LOOKUP.set(prefix + def.id, entry);
@@ -41,7 +47,13 @@ for (const def of MODEL_DEFINITIONS) {
 for (const family of ["opus", "sonnet", "haiku"]) {
     const def = MODEL_DEFINITIONS.find(d => d.family === family);
     if (def) {
-        MODEL_LOOKUP.set(family, { alias: def.alias, timeoutMs: def.timeoutMs, stallTimeoutMs: def.stallTimeoutMs });
+        MODEL_LOOKUP.set(family, {
+            id: def.id,
+            family: def.family,
+            alias: def.alias,
+            timeoutMs: def.timeoutMs,
+            stallTimeoutMs: def.stallTimeoutMs,
+        });
     }
 }
 /**
@@ -58,6 +70,23 @@ export function resolveModel(model) {
             const e = MODEL_LOOKUP.get(stripped);
             if (e)
                 return e.alias;
+        }
+    }
+    return null;
+}
+/**
+ * Resolve a request model string to its model family.
+ */
+export function resolveModelFamily(model) {
+    const entry = MODEL_LOOKUP.get(model);
+    if (entry)
+        return entry.family;
+    for (const prefix of PROVIDER_PREFIXES) {
+        if (model.startsWith(prefix)) {
+            const stripped = model.slice(prefix.length);
+            const e = MODEL_LOOKUP.get(stripped);
+            if (e)
+                return e.family;
         }
     }
     return null;
@@ -127,12 +156,18 @@ export function normalizeModelName(model) {
 /**
  * Get the OpenAI-compatible /v1/models response data.
  */
-export function getModelList() {
-    return MODEL_DEFINITIONS.map(def => ({
+export function getModelList(definitions = MODEL_DEFINITIONS) {
+    return definitions.map(def => ({
         id: def.id,
         object: "model",
         owned_by: "anthropic",
         created: Math.floor(Date.now() / 1000),
     }));
+}
+export function getModelDefinitions() {
+    return [...MODEL_DEFINITIONS];
+}
+export function getCanonicalModelId(family) {
+    return CANONICAL_IDS[family];
 }
 //# sourceMappingURL=models.js.map

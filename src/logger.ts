@@ -7,6 +7,7 @@
 
 export type LogEvent =
   | "request.start"
+  | "request.cancel"
   | "request.complete"
   | "request.retry"
   | "request.timeout"
@@ -21,6 +22,7 @@ export type LogEvent =
   | "session.context"
   | "token.validation_failed"
   | "queue.enqueue"
+  | "queue.drop"
   | "queue.blocked"
   | "queue.timeout"
   | "health.check"

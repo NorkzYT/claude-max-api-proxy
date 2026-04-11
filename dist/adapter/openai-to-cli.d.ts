@@ -1,5 +1,8 @@
+/**
+ * Converts OpenAI chat request format to Claude CLI input
+ */
 import type { OpenAIChatRequest, OpenAIChatMessage } from "../types/openai.js";
-export type ClaudeModel = "opus" | "sonnet" | "haiku";
+export type ClaudeModel = string;
 export interface CliInput {
     prompt: string;
     model: ClaudeModel;
@@ -10,10 +13,6 @@ export interface CliInput {
     _conversationId?: string;
     _startTime?: number;
 }
-/**
- * Extract Claude model alias from request model string.
- */
-export declare function extractModel(model: string): ClaudeModel;
 /**
  * Extract system messages and non-system messages separately.
  */
@@ -28,5 +27,5 @@ export declare function extractLastUserMessage(messages: OpenAIChatMessage[]): s
 /**
  * Convert OpenAI chat request to CLI input format
  */
-export declare function openaiToCli(request: OpenAIChatRequest, isResume?: boolean): CliInput;
+export declare function openaiToCli(request: OpenAIChatRequest, isResume?: boolean, cliModel?: ClaudeModel): CliInput;
 //# sourceMappingURL=openai-to-cli.d.ts.map

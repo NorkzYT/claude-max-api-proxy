@@ -6,23 +6,24 @@
  */
 import { startServer, stopServer, getServer } from "./server/index.js";
 import { verifyClaude, verifyAuth } from "./subprocess/manager.js";
+import { modelAvailability } from "./model-availability.js";
+import { runtimeConfig } from "./config.js";
 const PROVIDER_ID = "claude-code-cli";
 const PROVIDER_LABEL = "Claude Code CLI";
 const DEFAULT_PORT = 3456;
-const DEFAULT_MODEL = "claude-code-cli/claude-sonnet-4";
-const AVAILABLE_MODELS = [
-    { id: "claude-opus-4", name: "Claude Opus 4.6", alias: "opus", reasoning: true },
-    { id: "claude-opus-4-6", name: "Claude Opus 4.6", alias: "opus", reasoning: true },
-    { id: "claude-opus-4-5", name: "Claude Opus 4.5", alias: "opus", reasoning: true },
-    { id: "claude-sonnet-4", name: "Claude Sonnet 4", alias: "sonnet", reasoning: false },
-    { id: "claude-haiku-4", name: "Claude Haiku 4", alias: "haiku", reasoning: false },
-];
+function getModelName(model) {
+    if (model.family === "opus")
+        return "Claude Opus";
+    if (model.family === "haiku")
+        return "Claude Haiku";
+    return "Claude Sonnet";
+}
 function buildModelDefinition(model) {
     return {
         id: model.id,
-        name: model.name,
+        name: getModelName(model),
         api: "openai-completions",
-        reasoning: model.reasoning,
+        reasoning: model.family === "opus",
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
@@ -72,7 +73,14 @@ const claudeCodeCliPlugin = {
                                 await ctx.prompter.note("Run 'claude auth login' to authenticate with your Claude Max account", "Authentication");
                                 throw new Error(authCheck.error);
                             }
-                            spin.message("Authenticated, starting server...");
+                            spin.message("Authenticated, checking model access...");
+                            const availability = await modelAvailability.getSnapshot(true);
+                            if (availability.available.length === 0) {
+                                spin.stop("No accessible models");
+                                await ctx.prompter.note(availability.unavailable[0]?.error.message || "Claude CLI reported no accessible models for this account.", "Model Access");
+                                throw new Error("Claude CLI authentication succeeded, but no configured Claude models are accessible.");
+                            }
+                            spin.message("Models available, starting server...");
                             const portInput = await ctx.prompter.text({
                                 message: "Local server port",
                                 initialValue: String(DEFAULT_PORT),
@@ -88,6 +96,8 @@ const claudeCodeCliPlugin = {
                             await startServer({ port: serverPort });
                             spin.stop("Claude CLI provider ready");
                             const baseUrl = `http://127.0.0.1:${serverPort}/v1`;
+                            const availableModels = availability.available.map(buildModelDefinition);
+                            const defaultModel = `${PROVIDER_ID}/${availability.available[0].id}`;
                             return {
                                 profiles: [
                                     {
@@ -107,21 +117,23 @@ const claudeCodeCliPlugin = {
                                                 apiKey: "local",
                                                 api: "openai-completions",
                                                 authHeader: false,
-                                                models: AVAILABLE_MODELS.map(buildModelDefinition),
+                                                models: availableModels,
                                             },
                                         },
                                     },
                                     agents: {
                                         defaults: {
-                                            models: Object.fromEntries(AVAILABLE_MODELS.map((m) => [`${PROVIDER_ID}/${m.id}`, {}])),
+                                            models: Object.fromEntries(availability.available.map((model) => [`${PROVIDER_ID}/${model.id}`, {}])),
                                         },
                                     },
                                 },
-                                defaultModel: DEFAULT_MODEL,
+                                defaultModel,
                                 notes: [
                                     "This uses your Claude Max subscription via Claude Code CLI.",
                                     "Your OAuth token is used by the CLI, not exposed directly.",
                                     `Local server running at http://127.0.0.1:${serverPort}`,
+                                    `Available models: ${availability.available.map((model) => model.id).join(", ")}`,
+                                    `Same-conversation policy: ${runtimeConfig.sameConversationPolicy}`,
                                     "Keep the server running to use this provider.",
                                 ],
                             };

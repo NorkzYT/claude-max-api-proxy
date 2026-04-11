@@ -15,6 +15,8 @@ import { verifyClaude, verifyAuth } from "../subprocess/manager.js";
 import { subprocessRegistry } from "../subprocess/manager.js";
 import { sessionManager } from "../session/manager.js";
 import { log } from "../logger.js";
+import { modelAvailability } from "../model-availability.js";
+import { runtimeConfig } from "../config.js";
 const DEFAULT_PORT = 3456;
 const SHUTDOWN_GRACE_MS = 30000;
 async function main() {
@@ -40,6 +42,22 @@ async function main() {
         process.exit(1);
     }
     console.log("  Authentication: OK\n");
+    console.log("Checking model access...");
+    console.log(`Queue policy: ${runtimeConfig.sameConversationPolicy}`);
+    if (runtimeConfig.debugQueues) {
+        console.log("Queue debug logging: enabled");
+    }
+    const availability = await modelAvailability.getSnapshot(true);
+    if (availability.available.length === 0) {
+        console.warn("  No accessible models detected");
+        if (availability.unavailable[0]) {
+            console.warn(`  Reason: ${availability.unavailable[0].error.message}`);
+        }
+        console.warn("  The server will start, but /v1/models will be empty and chat requests will fail until model access is restored.\n");
+    }
+    else {
+        console.log(`  Models: ${availability.available.map((model) => model.id).join(", ")}\n`);
+    }
     try {
         await startServer({ port });
         log("server.start", { port });

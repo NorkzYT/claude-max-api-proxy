@@ -38,6 +38,7 @@ export interface ClaudeCliAssistantContent {
 }
 export interface ClaudeCliAssistant {
     type: "assistant";
+    error?: string;
     message: {
         model: string;
         id: string;
@@ -65,6 +66,7 @@ export interface ClaudeCliResult {
     result: string;
     session_id: string;
     total_cost_usd: number;
+    stop_reason?: string | null;
     usage: {
         input_tokens: number;
         output_tokens: number;

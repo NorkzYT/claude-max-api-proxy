@@ -12,16 +12,8 @@ import { spawn } from "child_process";
 import { EventEmitter } from "events";
 import { isAssistantMessage, isResultMessage, isContentDelta } from "../types/claude-cli.js";
 import { log } from "../logger.js";
+import { getCleanClaudeEnv } from "../claude-cli.inspect.js";
 const KILL_ESCALATION_MS = 5000;
-// Cache cleaned environment once at startup
-const CLEAN_ENV = (() => {
-    const env = { ...process.env };
-    delete env.CLAUDE_CODE_ENTRYPOINT;
-    delete env.CLAUDECODE;
-    delete env.CLAUDE_CODE_SESSION;
-    delete env.CLAUDE_CODE_PARENT;
-    return env;
-})();
 /**
  * Global subprocess registry for server-wide cleanup.
  * Tracks all active subprocesses so graceful shutdown can kill them all.
@@ -69,7 +61,7 @@ export class ClaudeSubprocess extends EventEmitter {
             try {
                 this.process = spawn("claude", args, {
                     cwd: options.cwd || process.cwd(),
-                    env: CLEAN_ENV,
+                    env: getCleanClaudeEnv(),
                     stdio: ["pipe", "pipe", "pipe"],
                 });
                 this.process.on("error", (err) => {
@@ -199,39 +191,5 @@ export class ClaudeSubprocess extends EventEmitter {
         return this.process?.pid ?? null;
     }
 }
-/**
- * Verify that Claude CLI is installed and accessible
- */
-export async function verifyClaude() {
-    return new Promise((resolve) => {
-        const proc = spawn("claude", ["--version"], { stdio: "pipe" });
-        let output = "";
-        proc.stdout?.on("data", (chunk) => {
-            output += chunk.toString();
-        });
-        proc.on("error", () => {
-            resolve({
-                ok: false,
-                error: "Claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code",
-            });
-        });
-        proc.on("close", (code) => {
-            if (code === 0) {
-                resolve({ ok: true, version: output.trim() });
-            }
-            else {
-                resolve({
-                    ok: false,
-                    error: "Claude CLI returned non-zero exit code",
-                });
-            }
-        });
-    });
-}
-/**
- * Check if Claude CLI is authenticated
- */
-export async function verifyAuth() {
-    return { ok: true };
-}
+export { verifyClaude, verifyAuth } from "../claude-cli.inspect.js";
 //# sourceMappingURL=manager.js.map

@@ -1,14 +1,4 @@
 /**
- * Converts OpenAI chat request format to Claude CLI input
- */
-import { resolveModel } from "../models.js";
-/**
- * Extract Claude model alias from request model string.
- */
-export function extractModel(model) {
-    return (resolveModel(model) ?? "sonnet");
-}
-/**
  * Flatten content to a string. Handles both string content and
  * OpenAI multi-part content arrays [{type: "text", text: "..."}].
  */
@@ -70,12 +60,13 @@ export function extractLastUserMessage(messages) {
 /**
  * Convert OpenAI chat request to CLI input format
  */
-export function openaiToCli(request, isResume = false) {
+export function openaiToCli(request, isResume = false, cliModel) {
+    const resolvedModel = cliModel || request.model || "claude-sonnet-4";
     if (isResume) {
         return {
             prompt: extractLastUserMessage(request.messages),
             systemPrompt: undefined,
-            model: extractModel(request.model),
+            model: resolvedModel,
             sessionId: request.user,
             isResume: true,
         };
@@ -84,7 +75,7 @@ export function openaiToCli(request, isResume = false) {
     return {
         prompt,
         systemPrompt,
-        model: extractModel(request.model),
+        model: resolvedModel,
         sessionId: request.user,
         isResume: false,
     };

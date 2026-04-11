@@ -1,10 +1,9 @@
 /**
  * Converts OpenAI chat request format to Claude CLI input
  */
-import { resolveModel } from "../models.js";
 import type { OpenAIChatRequest, OpenAIChatMessage } from "../types/openai.js";
 
-export type ClaudeModel = "opus" | "sonnet" | "haiku";
+export type ClaudeModel = string;
 
 export interface CliInput {
   prompt: string;
@@ -15,13 +14,6 @@ export interface CliInput {
   thinkingBudget?: number;
   _conversationId?: string;
   _startTime?: number;
-}
-
-/**
- * Extract Claude model alias from request model string.
- */
-export function extractModel(model: string): ClaudeModel {
-  return (resolveModel(model) ?? "sonnet") as ClaudeModel;
 }
 
 /**
@@ -89,12 +81,14 @@ export function extractLastUserMessage(messages: OpenAIChatMessage[]): string {
 /**
  * Convert OpenAI chat request to CLI input format
  */
-export function openaiToCli(request: OpenAIChatRequest, isResume = false): CliInput {
+export function openaiToCli(request: OpenAIChatRequest, isResume = false, cliModel?: ClaudeModel): CliInput {
+  const resolvedModel = cliModel || request.model || "claude-sonnet-4";
+
   if (isResume) {
     return {
       prompt: extractLastUserMessage(request.messages),
       systemPrompt: undefined,
-      model: extractModel(request.model),
+      model: resolvedModel,
       sessionId: request.user,
       isResume: true,
     };
@@ -104,7 +98,7 @@ export function openaiToCli(request: OpenAIChatRequest, isResume = false): CliIn
   return {
     prompt,
     systemPrompt,
-    model: extractModel(request.model),
+    model: resolvedModel,
     sessionId: request.user,
     isResume: false,
   };

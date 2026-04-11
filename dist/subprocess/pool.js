@@ -4,17 +4,9 @@
  * Pre-spawns Claude CLI processes so requests don't pay cold-start cost.
  */
 import { spawn } from "child_process";
+import { getCleanClaudeEnv } from "../claude-cli.inspect.js";
 const POOL_SIZE = 5;
 const WARMUP_INTERVAL_MS = 30 * 1000;
-// Clean env matching manager.ts
-const CLEAN_ENV = (() => {
-    const env = { ...process.env };
-    delete env.CLAUDE_CODE_ENTRYPOINT;
-    delete env.CLAUDECODE;
-    delete env.CLAUDE_CODE_SESSION;
-    delete env.CLAUDE_CODE_PARENT;
-    return env;
-})();
 class SubprocessPool {
     warmedAt = 0;
     warming = false;
@@ -45,7 +37,7 @@ class SubprocessPool {
     }
     spawnQuick() {
         return new Promise((resolve) => {
-            const proc = spawn("claude", ["--version"], { stdio: "pipe", env: CLEAN_ENV });
+            const proc = spawn("claude", ["--version"], { stdio: "pipe", env: getCleanClaudeEnv() });
             proc.on("close", () => resolve());
             proc.on("error", () => resolve());
             setTimeout(() => {
@@ -64,7 +56,7 @@ class SubprocessPool {
                     "--print", "--output-format", "stream-json",
                     "--model", "haiku",
                     "hi",
-                ], { stdio: "pipe", env: CLEAN_ENV });
+                ], { stdio: "pipe", env: getCleanClaudeEnv() });
                 let done = false;
                 const finish = () => {
                     if (done)
