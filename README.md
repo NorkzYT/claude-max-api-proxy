@@ -44,18 +44,18 @@ It runs a tiny local HTTP server on `127.0.0.1:3456`, translates OpenAI `/v1/cha
 
 ## Features
 
-|  |  |
-| --- | --- |
-| 🔌 **Drop-in OpenAI API** | `/v1/chat/completions`, `/v1/models`, and `/health` — streaming and non-streaming. |
-| 🔑 **Zero API keys** | Uses your machine's existing `claude auth login` session. |
-| 🧠 **Multi-model** | Auto-detects which Claude models your account actually has access to. |
-| ♻️ **Session continuity** | Reuses the same `user` field as a conversation key; transparently resumes CLI sessions. |
-| ⚡ **Warm subprocess pool** | Keeps `claude` processes pre-spawned so first-token latency stays low. |
-| 🛡️ **Stall detection + kill escalation** | Per-family stall timeouts, SIGTERM → SIGKILL grace, graceful shutdown. |
-| 📊 **Rich `/health`** | Live auth, model probes, pool, queues, subprocesses, recent errors — one endpoint. |
-| 🔄 **Same-conversation policy** | `latest-wins` or `queue` — you pick. Prevents unbounded backlog. |
-| 🪵 **Structured JSON logs** | Every request, queue event, subprocess lifecycle, session event. |
-| 🧩 **TypeScript, strict mode** | Clean module layout, no `any` escape hatches. |
+|                                          |                                                                                         |
+| ---------------------------------------- | --------------------------------------------------------------------------------------- |
+| 🔌 **Drop-in OpenAI API**                | `/v1/chat/completions`, `/v1/models`, and `/health` — streaming and non-streaming.      |
+| 🔑 **Zero API keys**                     | Uses your machine's existing `claude auth login` session.                               |
+| 🧠 **Multi-model**                       | Auto-detects which Claude models your account actually has access to.                   |
+| ♻️ **Session continuity**                | Reuses the same `user` field as a conversation key; transparently resumes CLI sessions. |
+| ⚡ **Warm subprocess pool**              | Keeps `claude` processes pre-spawned so first-token latency stays low.                  |
+| 🛡️ **Stall detection + kill escalation** | Per-family stall timeouts, SIGTERM → SIGKILL grace, graceful shutdown.                  |
+| 📊 **Rich `/health`**                    | Live auth, model probes, pool, queues, subprocesses, recent errors — one endpoint.      |
+| 🔄 **Same-conversation policy**          | `latest-wins` or `queue` — you pick. Prevents unbounded backlog.                        |
+| 🪵 **Structured JSON logs**              | Every request, queue event, subprocess lifecycle, session event.                        |
+| 🧩 **TypeScript, strict mode**           | Clean module layout, no `any` escape hatches.                                           |
 
 ## Quickstart
 
@@ -148,6 +148,7 @@ curl -N http://127.0.0.1:3456/v1/chat/completions \
   ]
 }
 ```
+
 </details>
 
 <details>
@@ -161,14 +162,12 @@ curl -N http://127.0.0.1:3456/v1/chat/completions \
       "api": "openai-completions",
       "auth": "api-key",
       "apiKey": "ignored",
-      "models": [
-        { "id": "claude-sonnet-4-6" },
-        { "id": "claude-opus-4-6" }
-      ]
+      "models": [{ "id": "claude-sonnet-4-6" }, { "id": "claude-opus-4-6" }]
     }
   }
 }
 ```
+
 </details>
 
 <details>
@@ -176,11 +175,12 @@ curl -N http://127.0.0.1:3456/v1/chat/completions \
 
 Use these defaults:
 
-| Setting      | Value                          |
-| ---          | ---                            |
-| Base URL     | `http://127.0.0.1:3456/v1`     |
-| API key      | any non-empty string           |
-| Model        | whatever `/v1/models` returns  |
+| Setting  | Value                         |
+| -------- | ----------------------------- |
+| Base URL | `http://127.0.0.1:3456/v1`    |
+| API key  | any non-empty string          |
+| Model    | whatever `/v1/models` returns |
+
 </details>
 
 ## Configuration
@@ -204,30 +204,31 @@ npm start
 
 - **macOS** → [docs/macos-setup.md](./docs/macos-setup.md) (LaunchAgent, auto-start, KeepAlive)
 - **Linux** → use systemd with a unit file that runs `node dist/server/standalone.js`
-- **Docker** → not yet provided; contributions welcome
+- **Docker** → [docs/docker-setup.md](./docs/docker-setup.md)
 
 ## Documentation
 
-| Doc | What's in it |
-| --- | --- |
-| [docs/API.md](./docs/API.md) | Full API reference — endpoints, request / response shapes, examples |
-| [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) | Environment variables, timeouts, policies |
-| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | How the proxy works internally — pool, queues, sessions, logging |
-| [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) | Every failure mode and how to fix it |
-| [docs/macos-setup.md](./docs/macos-setup.md) | LaunchAgent setup for auto-start on macOS |
-| [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup, style, PR flow |
-| [SECURITY.md](./SECURITY.md) | How to report security issues |
+| Doc                                                  | What's in it                                                        |
+| ---------------------------------------------------- | ------------------------------------------------------------------- |
+| [docs/API.md](./docs/API.md)                         | Full API reference — endpoints, request / response shapes, examples |
+| [docs/CONFIGURATION.md](./docs/CONFIGURATION.md)     | Environment variables, timeouts, policies                           |
+| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)       | How the proxy works internally — pool, queues, sessions, logging    |
+| [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) | Every failure mode and how to fix it                                |
+| [docs/macos-setup.md](./docs/macos-setup.md)         | LaunchAgent setup for auto-start on macOS                           |
+| [docs/docker-setup.md](./docs/docker-setup.md)       | Docker and Docker Compose setup                                     |
+| [CONTRIBUTING.md](./CONTRIBUTING.md)                 | Dev setup, style, PR flow                                           |
+| [SECURITY.md](./SECURITY.md)                         | How to report security issues                                       |
 
 ## How it compares
 
-|                                  | `claude-max-api-proxy` | Direct Anthropic API     | Claude Code CLI only      |
-| ---                              | :---:                  | :---:                    | :---:                     |
-| Uses your Max plan               | ✅                     | ❌ (separate billing)    | ✅                        |
-| OpenAI-compatible endpoints      | ✅                     | ❌                       | ❌                        |
-| Streaming                        | ✅                     | ✅                       | ✅                        |
-| Session continuity               | ✅                     | ⚠️ (manual)              | ✅                        |
-| Works with Continue/Aider/etc.   | ✅                     | ⚠️ (with LiteLLM etc.)   | ❌                        |
-| Requires API key                 | ❌                     | ✅                       | ❌                        |
+|                                | `claude-max-api-proxy` |  Direct Anthropic API  | Claude Code CLI only |
+| ------------------------------ | :--------------------: | :--------------------: | :------------------: |
+| Uses your Max plan             |           ✅           | ❌ (separate billing)  |          ✅          |
+| OpenAI-compatible endpoints    |           ✅           |           ❌           |          ❌          |
+| Streaming                      |           ✅           |           ✅           |          ✅          |
+| Session continuity             |           ✅           |      ⚠️ (manual)       |          ✅          |
+| Works with Continue/Aider/etc. |           ✅           | ⚠️ (with LiteLLM etc.) |          ❌          |
+| Requires API key               |           ❌           |           ✅           |          ❌          |
 
 ## Requirements
 
@@ -247,7 +248,7 @@ npm test         # runs compiled tests under dist/
 npm start        # dist/server/standalone.js
 ```
 
-Source lives in `src/`, compiled output in `dist/`. Tests live next to the code they test (`*.test.ts` → `dist/**/*.test.js`). See [CONTRIBUTING.md](./CONTRIBUTING.md) for more.
+Source lives in `src/`, compiled output in `dist/` (gitignored). Tests live next to the code they test (`*.test.ts` → `dist/**/*.test.js`). See [CONTRIBUTING.md](./CONTRIBUTING.md) for more.
 
 ## Security
 
