@@ -1,6 +1,9 @@
 export type SameConversationPolicy = "latest-wins" | "queue";
 
-function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
+function parseBoolean(
+  value: string | undefined,
+  defaultValue: boolean,
+): boolean {
   if (value == null || value.trim() === "") return defaultValue;
   const normalized = value.trim().toLowerCase();
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
@@ -8,7 +11,9 @@ function parseBoolean(value: string | undefined, defaultValue: boolean): boolean
   return defaultValue;
 }
 
-export function parseSameConversationPolicy(value: string | undefined): SameConversationPolicy {
+export function parseSameConversationPolicy(
+  value: string | undefined,
+): SameConversationPolicy {
   const normalized = value?.trim().toLowerCase();
   return normalized === "queue" ? "queue" : "latest-wins";
 }
@@ -16,12 +21,18 @@ export function parseSameConversationPolicy(value: string | undefined): SameConv
 export interface ProxyRuntimeConfig {
   sameConversationPolicy: SameConversationPolicy;
   debugQueues: boolean;
+  defaultThinkingBudget: string | undefined;
 }
 
-export function readRuntimeConfig(env: NodeJS.ProcessEnv = process.env): ProxyRuntimeConfig {
+export function readRuntimeConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): ProxyRuntimeConfig {
   return {
-    sameConversationPolicy: parseSameConversationPolicy(env.CLAUDE_PROXY_SAME_CONVERSATION_POLICY),
+    sameConversationPolicy: parseSameConversationPolicy(
+      env.CLAUDE_PROXY_SAME_CONVERSATION_POLICY,
+    ),
     debugQueues: parseBoolean(env.CLAUDE_PROXY_DEBUG_QUEUES, false),
+    defaultThinkingBudget: env.DEFAULT_THINKING_BUDGET?.trim() || undefined,
   };
 }
 

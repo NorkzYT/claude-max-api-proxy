@@ -50,16 +50,34 @@ import { runtimeConfig } from "../config.js";
 // Thinking budget resolution
 // ---------------------------------------------------------------------------
 
-// OpenAI-style reasoning_effort → token budget mapping.
-// Values align with Claude CLI's --effort levels (low, medium, high, max),
-// mapped back in src/subprocess/manager.ts#thinkingBudgetToEffort.
+// Label → token-budget mapping. Labels mirror OpenClaw's /think choices so
+// clients can pass the same string they use there. Token values align with
+// Claude CLI's --effort levels (low, medium, high, max). "adaptive" and "off"
+// both mean "do not pass --effort to the CLI" (Claude's adaptive default).
+//
+// Aliases:
+//   xhigh -> max (Claude tops out at --effort max; OpenClaw's xhigh is GPT-only)
+//   minimal -> low (no CLI level below low)
 const REASONING_EFFORT_MAP: Record<string, number> = {
-  minimal: 1024,
+  off: 0,
+  adaptive: 0,
+  minimal: 5000,
   low: 5000,
   medium: 10000,
   high: 32000,
+  xhigh: 64000,
   max: 64000,
 };
+
+function parseEffortOrTokens(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const lower = trimmed.toLowerCase();
+  if (lower in REASONING_EFFORT_MAP) return REASONING_EFFORT_MAP[lower];
+  const parsed = parseInt(trimmed, 10);
+  if (Number.isFinite(parsed) && parsed >= 0) return parsed;
+  return undefined;
+}
 
 /**
  * Resolve thinking budget from multiple sources in priority order:
@@ -85,30 +103,22 @@ function resolveThinkingBudget(
     return thinking.budget_tokens;
   }
 
-  const effort = body.reasoning_effort as string | undefined;
-  if (
-    typeof effort === "string" &&
-    effort.toLowerCase() in REASONING_EFFORT_MAP
-  ) {
-    return REASONING_EFFORT_MAP[effort.toLowerCase()];
+  const effort = body.reasoning_effort;
+  if (typeof effort === "string") {
+    const value = parseEffortOrTokens(effort);
+    if (value !== undefined) return value > 0 ? value : undefined;
   }
 
   const headerVal = req.header("x-thinking-budget");
   if (headerVal) {
-    const parsed = parseInt(headerVal, 10);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-    if (headerVal.toLowerCase() in REASONING_EFFORT_MAP) {
-      return REASONING_EFFORT_MAP[headerVal.toLowerCase()];
-    }
+    const value = parseEffortOrTokens(headerVal);
+    if (value !== undefined) return value > 0 ? value : undefined;
   }
 
-  const envDefault = process.env.DEFAULT_THINKING_BUDGET;
-  if (envDefault) {
-    const parsed = parseInt(envDefault, 10);
-    if (Number.isFinite(parsed) && parsed > 0) return parsed;
-    if (envDefault.toLowerCase() in REASONING_EFFORT_MAP) {
-      return REASONING_EFFORT_MAP[envDefault.toLowerCase()];
-    }
+  const runtimeDefault = runtimeConfig.defaultThinkingBudget;
+  if (runtimeDefault) {
+    const value = parseEffortOrTokens(runtimeDefault);
+    if (value !== undefined) return value > 0 ? value : undefined;
   }
 
   return undefined;
@@ -1329,6 +1339,46 @@ async function handleNonStreamingResponse(
         resolve();
       });
   });
+}
+
+// ---------------------------------------------------------------------------
+// Admin: runtime-mutable thinking budget
+// ---------------------------------------------------------------------------
+
+export function handleGetThinkingBudget(_req: Request, res: Response): void {
+  res.json({
+    budget: runtimeConfig.defaultThinkingBudget ?? null,
+    allowedLabels: Object.keys(REASONING_EFFORT_MAP),
+  });
+}
+
+export function handleSetThinkingBudget(req: Request, res: Response): void {
+  const body = (req.body ?? {}) as { budget?: unknown };
+  const raw = body.budget;
+
+  if (raw === null || raw === undefined || raw === "") {
+    runtimeConfig.defaultThinkingBudget = undefined;
+    log("admin.thinking_budget.cleared", {});
+    res.json({ budget: null });
+    return;
+  }
+
+  const asString = String(raw);
+  const parsed = parseEffortOrTokens(asString);
+  if (parsed === undefined) {
+    res.status(400).json({
+      error: {
+        message: `Invalid budget "${asString}". Use one of: ${Object.keys(REASONING_EFFORT_MAP).join(", ")}, or a positive integer token count.`,
+        type: "invalid_request_error",
+        code: "invalid_budget",
+      },
+    });
+    return;
+  }
+
+  runtimeConfig.defaultThinkingBudget = asString;
+  log("admin.thinking_budget.set", { budget: asString, tokens: parsed });
+  res.json({ budget: asString, tokens: parsed });
 }
 
 // ---------------------------------------------------------------------------

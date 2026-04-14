@@ -27,7 +27,9 @@ export type LogEvent =
   | "queue.timeout"
   | "health.check"
   | "server.shutdown"
-  | "server.start";
+  | "server.start"
+  | "admin.thinking_budget.set"
+  | "admin.thinking_budget.cleared";
 
 export interface LogEntry {
   ts: string;
@@ -45,11 +47,18 @@ function emit(entry: LogEntry): void {
   console.log(JSON.stringify(entry));
 }
 
-export function log(event: LogEvent, fields: Omit<LogEntry, "ts" | "event"> = {}): void {
+export function log(
+  event: LogEvent,
+  fields: Omit<LogEntry, "ts" | "event"> = {},
+): void {
   emit({ ts: new Date().toISOString(), event, ...fields });
 }
 
-export function logError(event: LogEvent, error: unknown, fields: Omit<LogEntry, "ts" | "event"> = {}): void {
+export function logError(
+  event: LogEvent,
+  error: unknown,
+  fields: Omit<LogEntry, "ts" | "event"> = {},
+): void {
   const message = error instanceof Error ? error.message : String(error);
   emit({ ts: new Date().toISOString(), event, reason: message, ...fields });
 }

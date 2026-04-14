@@ -100,9 +100,9 @@ export const subprocessRegistry = new SubprocessRegistry();
  */
 function thinkingBudgetToEffort(budget: number): string | undefined {
   if (!Number.isFinite(budget) || budget <= 0) return undefined;
-  if (budget >= 32000) return "max";
-  if (budget >= 10000) return "high";
-  if (budget >= 5000) return "medium";
+  if (budget > 32000) return "max";
+  if (budget > 10000) return "high";
+  if (budget > 5000) return "medium";
   return "low";
 }
 
@@ -142,10 +142,14 @@ export class ClaudeSubprocess extends EventEmitter {
         this.process.stdin?.end();
 
         const pid = this.process.pid;
+        const effort = options.thinkingBudget
+          ? thinkingBudgetToEffort(options.thinkingBudget)
+          : undefined;
         log("subprocess.spawn", {
           pid,
           model: options.model,
-          thinking: options.thinkingBudget ?? "off",
+          thinking: effort ?? "off",
+          thinkingTokens: options.thinkingBudget ?? 0,
           sessionId: options.sessionId?.slice(0, 8),
           resume: options.isResume,
         });

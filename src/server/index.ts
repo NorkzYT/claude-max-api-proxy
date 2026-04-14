@@ -6,7 +6,13 @@
 import express from "express";
 import { createServer, type Server } from "http";
 import type { Socket } from "net";
-import { handleChatCompletions, handleModels, handleHealth } from "./routes.js";
+import {
+  handleChatCompletions,
+  handleModels,
+  handleHealth,
+  handleGetThinkingBudget,
+  handleSetThinkingBudget,
+} from "./routes.js";
 import "../subprocess/pool.js";
 import "../store/conversation.js";
 
@@ -32,7 +38,10 @@ function createApp(): express.Application {
   app.use((_req, res, next) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization",
+    );
     next();
   });
 
@@ -43,6 +52,9 @@ function createApp(): express.Application {
   app.get("/health", handleHealth);
   app.get("/v1/models", handleModels);
   app.post("/v1/chat/completions", handleChatCompletions);
+  app.get("/admin/thinking-budget", handleGetThinkingBudget);
+  app.post("/admin/thinking-budget", handleSetThinkingBudget);
+  app.put("/admin/thinking-budget", handleSetThinkingBudget);
 
   app.use((_req, res) => {
     res.status(404).json({
@@ -54,16 +66,23 @@ function createApp(): express.Application {
     });
   });
 
-  app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-    console.error("[Server Error]:", err.message);
-    res.status(500).json({
-      error: {
-        message: err.message,
-        type: "server_error",
-        code: null,
-      },
-    });
-  });
+  app.use(
+    (
+      err: Error,
+      _req: express.Request,
+      res: express.Response,
+      _next: express.NextFunction,
+    ) => {
+      console.error("[Server Error]:", err.message);
+      res.status(500).json({
+        error: {
+          message: err.message,
+          type: "server_error",
+          code: null,
+        },
+      });
+    },
+  );
 
   return app;
 }
@@ -91,8 +110,12 @@ export async function startServer(config: ServerConfig): Promise<Server> {
     });
 
     serverInstance.listen(port, host, () => {
-      console.log(`[Server] Claude Code CLI provider running at http://${host}:${port}`);
-      console.log(`[Server] OpenAI-compatible endpoint: http://${host}:${port}/v1/chat/completions`);
+      console.log(
+        `[Server] Claude Code CLI provider running at http://${host}:${port}`,
+      );
+      console.log(
+        `[Server] OpenAI-compatible endpoint: http://${host}:${port}/v1/chat/completions`,
+      );
       resolve(serverInstance!);
     });
   });

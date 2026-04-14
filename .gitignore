@@ -1,7 +1,8 @@
 # Dependencies
 node_modules/
 
-# Build / TS incremental
+# Build output
+dist/
 *.tsbuildinfo
 
 # Env
