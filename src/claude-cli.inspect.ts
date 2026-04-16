@@ -6,6 +6,7 @@ import type {
   ClaudeCliMessage,
   ClaudeCliResult,
 } from "./types/claude-cli.js";
+import { tokenGate } from "./auth/token-gate.js";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 10000;
 const PROBE_PROMPT = "Reply with exactly: OK";
@@ -217,43 +218,50 @@ export async function runClaudeCommand(
   args: string[],
   timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
 ): Promise<ClaudeCommandResult> {
-  return new Promise<ClaudeCommandResult>((resolve) => {
-    const proc = spawn("claude", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: getCleanClaudeEnv(),
-    });
+  // Serialize spawns during the OAuth refresh window so concurrent `claude`
+  // invocations can't race on refresh_token rotation. Outside the window the
+  // gate fast-paths with no overhead. The gated promise resolves on child
+  // EXIT (via close/error) so the mutex is held for the full lifetime.
+  return tokenGate.runGated(
+    () =>
+      new Promise<ClaudeCommandResult>((resolve) => {
+        const proc = spawn("claude", args, {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: getCleanClaudeEnv(),
+        });
 
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
+        let stdout = "";
+        let stderr = "";
+        let timedOut = false;
 
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      try {
-        proc.kill("SIGTERM");
-      } catch {
-        // ignore
-      }
-    }, timeoutMs);
+        const timeoutId = setTimeout(() => {
+          timedOut = true;
+          try {
+            proc.kill("SIGTERM");
+          } catch {
+            // ignore
+          }
+        }, timeoutMs);
 
-    proc.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
+        proc.stdout?.on("data", (chunk: Buffer) => {
+          stdout += chunk.toString();
+        });
 
-    proc.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
+        proc.stderr?.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString();
+        });
 
-    proc.on("error", () => {
-      clearTimeout(timeoutId);
-      resolve({ stdout, stderr, code: null, signal: null, timedOut });
-    });
+        proc.on("error", () => {
+          clearTimeout(timeoutId);
+          resolve({ stdout, stderr, code: null, signal: null, timedOut });
+        });
 
-    proc.on("close", (code, signal) => {
-      clearTimeout(timeoutId);
-      resolve({ stdout, stderr, code, signal, timedOut });
-    });
-  });
+        proc.on("close", (code, signal) => {
+          clearTimeout(timeoutId);
+          resolve({ stdout, stderr, code, signal, timedOut });
+        });
+      }),
+  );
 }
 
 export async function verifyClaude(): Promise<{

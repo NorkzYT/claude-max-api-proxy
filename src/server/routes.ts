@@ -45,6 +45,8 @@ import type {
   ClaudeCliStreamEvent,
 } from "../types/claude-cli.js";
 import { runtimeConfig, persistRuntimeState } from "../config.js";
+import { isAuthError, withAuthRetry } from "./auth-retry.js";
+export { isAuthError, withAuthRetry } from "./auth-retry.js";
 
 // ---------------------------------------------------------------------------
 // Thinking budget resolution
@@ -680,6 +682,12 @@ interface StreamOpts {
   res: Response;
   onStall: () => void;
   registerCancel?: (cancel: (error: ClaudeProxyError) => void) => void;
+  /**
+   * When true, an upstream auth/401 failure will NOT be written to the HTTP
+   * response — the caller is responsible for retrying. Used by the single
+   * auth-retry path in handleStreamingResponse / handleNonStreamingResponse.
+   */
+  allowAuthRetry?: boolean;
 }
 
 /**
@@ -687,10 +695,14 @@ interface StreamOpts {
  * returns a promise that resolves when the subprocess completes.
  * Eliminates the duplicated event handler wiring from the old retry logic.
  */
-function runStreamingSubprocess(
-  opts: StreamOpts,
-): Promise<{ fullResponse: string; success: boolean; cancelled: boolean }> {
-  const { cliInput, requestId, res, onStall, registerCancel } = opts;
+function runStreamingSubprocess(opts: StreamOpts): Promise<{
+  fullResponse: string;
+  success: boolean;
+  cancelled: boolean;
+  authErrored?: boolean;
+}> {
+  const { cliInput, requestId, res, onStall, registerCancel, allowAuthRetry } =
+    opts;
 
   const baseTimeout = getModelTimeout(cliInput.model);
   const hardTimeout = cliInput.thinkingBudget ? baseTimeout * 3 : baseTimeout;
@@ -702,6 +714,7 @@ function runStreamingSubprocess(
     fullResponse: string;
     success: boolean;
     cancelled: boolean;
+    authErrored?: boolean;
   }>((resolve) => {
     const subprocess = new ClaudeSubprocess();
     const cleanup = new CleanupSet();
@@ -731,11 +744,15 @@ function runStreamingSubprocess(
       return `data: {"id":"${chunkId}","object":"chat.completion.chunk","created":${ts},"model":"${model}","choices":[{"index":0,"delta":{"content":${escaped}},"finish_reason":null}]}\n\n`;
     };
 
-    const finish = (success: boolean, cancelled = false): void => {
+    const finish = (
+      success: boolean,
+      cancelled = false,
+      authErrored = false,
+    ): void => {
       if (isComplete) return;
       isComplete = true;
       cleanup.runAll();
-      resolve({ fullResponse, success, cancelled });
+      resolve({ fullResponse, success, cancelled, authErrored });
     };
 
     // SSE keepalive
@@ -922,10 +939,15 @@ function runStreamingSubprocess(
           console.error("[Routes] Metric error:", e);
         }
 
-        if (!clientDisconnected && !res.writableEnded) {
+        // If this is an upstream auth/401 failure AND the caller is
+        // prepared to retry (first attempt), bubble the auth error back
+        // without writing to the stream. The caller will invalidate the
+        // model-availability cache and re-run the subprocess once.
+        const authErr = allowAuthRetry && isAuthError(cliError);
+        if (!authErr && !clientDisconnected && !res.writableEnded) {
           writeStreamingError(res, cliError);
         }
-        finish(false);
+        finish(false, false, authErr);
         return;
       }
 
@@ -1107,18 +1129,33 @@ async function handleStreamingResponse(
 ): Promise<void> {
   startStreamingResponse(res, requestId);
 
-  // First attempt
-  const result = await runStreamingSubprocess({
-    cliInput,
-    requestId,
-    res,
-    registerCancel,
-    onStall: () => {
-      if (cliInput._conversationId) {
-        sessionManager.markFailed(cliInput._conversationId);
-      }
+  // First attempt, with a single 401-driven retry wrapping it. If the CLI
+  // reports auth_required / 401, invalidate the 10-min model-availability
+  // cache and re-run exactly once. The token gate serializes the re-run so
+  // the CLI has a clean refresh path.
+  const result = await withAuthRetry(
+    (allowAuthRetry) =>
+      runStreamingSubprocess({
+        cliInput,
+        requestId,
+        res,
+        registerCancel,
+        allowAuthRetry,
+        onStall: () => {
+          if (cliInput._conversationId) {
+            sessionManager.markFailed(cliInput._conversationId);
+          }
+        },
+      }),
+    () => {
+      log("request.retry", {
+        requestId,
+        conversationId: cliInput._conversationId,
+        reason: "auth_retry",
+      });
+      modelAvailability.invalidate();
     },
-  });
+  );
 
   if (result.success || result.cancelled) return;
 
@@ -1168,10 +1205,47 @@ async function handleNonStreamingResponse(
   requestId: string,
   registerCancel?: (cancel: (error: ClaudeProxyError) => void) => void,
 ): Promise<void> {
+  await withAuthRetry(
+    (allowAuthRetry) =>
+      runNonStreamingSubprocess(
+        res,
+        cliInput,
+        requestId,
+        registerCancel,
+        allowAuthRetry,
+      ),
+    () => {
+      log("request.retry", {
+        requestId,
+        conversationId: cliInput._conversationId,
+        reason: "auth_retry",
+      });
+      modelAvailability.invalidate();
+    },
+  );
+}
+
+/**
+ * Run a single non-streaming Claude CLI subprocess and write its result to
+ * `res`. When `allowAuthRetry` is true, an upstream auth/401 failure is
+ * reported back to the caller as `{authErrored: true}` WITHOUT writing the
+ * error to the HTTP response — the caller is responsible for retrying once.
+ */
+async function runNonStreamingSubprocess(
+  res: Response,
+  cliInput: CliInput,
+  requestId: string,
+  registerCancel:
+    | ((cancel: (error: ClaudeProxyError) => void) => void)
+    | undefined,
+  allowAuthRetry: boolean,
+): Promise<{ authErrored: boolean }> {
   const baseTimeout = getModelTimeout(cliInput.model);
   const timeout = cliInput.thinkingBudget ? baseTimeout * 3 : baseTimeout;
 
-  return new Promise<void>((resolve) => {
+  return new Promise<{ authErrored: boolean }>((resolve) => {
+    let authErrored = false;
+    const done = (): void => resolve({ authErrored });
     const subprocess = new ClaudeSubprocess();
     const cleanup = new CleanupSet();
     let finalResult: ClaudeCliResult | null = null;
@@ -1191,7 +1265,7 @@ async function handleNonStreamingResponse(
       isComplete = true;
       cleanup.runAll();
       respondWithError(res, error, false, requestId);
-      resolve();
+      done();
     });
 
     const timeoutId = setTimeout(() => {
@@ -1213,7 +1287,7 @@ async function handleNonStreamingResponse(
         }
         isComplete = true;
         cleanup.runAll();
-        resolve();
+        done();
       }
     }, timeout);
     cleanup.add(() => clearTimeout(timeoutId));
@@ -1236,7 +1310,7 @@ async function handleNonStreamingResponse(
           error: { message: error.message, type: "server_error", code: null },
         });
       }
-      resolve();
+      done();
     });
 
     subprocess.on("close", (code: number | null) => {
@@ -1269,10 +1343,15 @@ async function handleNonStreamingResponse(
             sessionManager.markFailed(cliInput._conversationId);
           }
 
-          if (!res.headersSent) {
+          // 401-driven retry hand-off: when the caller still has a retry
+          // budget, flag the failure instead of writing it to the response.
+          const authErr = allowAuthRetry && isAuthError(cliError);
+          if (authErr) {
+            authErrored = true;
+          } else if (!res.headersSent) {
             sendJsonError(res, cliError);
           }
-          resolve();
+          done();
           return;
         }
 
@@ -1309,7 +1388,7 @@ async function handleNonStreamingResponse(
           },
         });
       }
-      resolve();
+      done();
     });
 
     subprocess
@@ -1327,7 +1406,7 @@ async function handleNonStreamingResponse(
             error: { message: error.message, type: "server_error", code: null },
           });
         }
-        resolve();
+        done();
       });
   });
 }
