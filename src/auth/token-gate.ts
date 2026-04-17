@@ -26,8 +26,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const REFRESH_LEAD_MS = 10 * 60 * 1000; // 10 minutes before expiry
-const REFRESH_TAIL_MS = 2 * 60 * 1000; // 2 minutes after expiry (grace)
+const REFRESH_LEAD_MS = 30 * 60 * 1000; // 30 minutes before expiry
+const REFRESH_TAIL_MS = 5 * 60 * 1000; // 5 minutes after expiry (grace)
 
 interface ClaudeCredentials {
   claudeAiOauth?: {

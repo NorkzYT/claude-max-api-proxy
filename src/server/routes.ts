@@ -1157,6 +1157,7 @@ async function handleStreamingResponse(
       });
       modelAvailability.invalidate();
     },
+    { requestId, conversationId: cliInput._conversationId },
   );
 
   if (result.success || result.cancelled) return;
@@ -1224,6 +1225,7 @@ async function handleNonStreamingResponse(
       });
       modelAvailability.invalidate();
     },
+    { requestId, conversationId: cliInput._conversationId },
   );
 }
 
@@ -1529,10 +1531,27 @@ export async function handleHealth(
   // Session failure stats
   const failureStats = sessionManager.getFailureStats();
 
+  // Auth circuit breaker: after AUTH_UNHEALTHY_THRESHOLD consecutive
+  // verifyAuth failures, respond 503 so container orchestrators (Docker
+  // healthcheck, k8s liveness) can restart the proxy instead of requiring
+  // a manual `make restart`. Once verifyAuth succeeds again, the counter
+  // resets and /health returns 200.
+  const AUTH_UNHEALTHY_THRESHOLD = 3;
+  const consecutiveAuthFailures =
+    modelAvailability.getConsecutiveAuthFailures();
+  const authUnhealthy = consecutiveAuthFailures >= AUTH_UNHEALTHY_THRESHOLD;
+  if (authUnhealthy) {
+    res.status(503);
+  }
+
   res.json({
-    status: "ok",
+    status: authUnhealthy ? "unhealthy" : "ok",
+    unhealthyReason: authUnhealthy
+      ? `verifyAuth failed ${consecutiveAuthFailures} consecutive times`
+      : undefined,
     provider: "claude-code-cli",
     timestamp: new Date().toISOString(),
+    consecutiveAuthFailures,
     sessions: {
       active: sessionManager.size,
       failureStats,

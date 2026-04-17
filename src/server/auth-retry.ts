@@ -6,6 +6,7 @@
  * manager, SQLite store) and its module-level `setInterval`s.
  */
 import type { ClaudeProxyError } from "../claude-cli.inspect.js";
+import { log } from "../logger.js";
 
 /**
  * True when an upstream Claude CLI failure looks like a revoked / expired
@@ -39,9 +40,31 @@ export interface AuthRetryShape {
 export async function withAuthRetry<R extends AuthRetryShape>(
   run: (allowAuthRetry: boolean) => Promise<R>,
   onAuthFailure: () => void,
+  context: { requestId?: string; conversationId?: string } = {},
 ): Promise<R> {
   const first = await run(true);
   if (!first.authErrored) return first;
+  log("auth.failure", {
+    requestId: context.requestId,
+    conversationId: context.conversationId,
+    phase: "initial",
+    message: "upstream 401 / invalid credentials; retrying once",
+  });
   onAuthFailure();
-  return run(false);
+  const second = await run(false);
+  if (second.authErrored) {
+    log("auth.failure", {
+      requestId: context.requestId,
+      conversationId: context.conversationId,
+      phase: "retry_exhausted",
+      message:
+        "upstream 401 persisted after cache invalidation — credentials likely zombie",
+    });
+  } else if (second.success) {
+    log("auth.recovered", {
+      requestId: context.requestId,
+      conversationId: context.conversationId,
+    });
+  }
+  return second;
 }

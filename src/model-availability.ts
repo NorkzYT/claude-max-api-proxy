@@ -11,6 +11,7 @@ import {
   type ModelDefinition,
   type ModelFamily,
 } from "./models.js";
+import { log } from "./logger.js";
 
 const PROBE_TTL_MS = 10 * 60 * 1000;
 // When verifyAuth fails, normally the PROBE_TTL_MS cache would hold the
@@ -20,6 +21,14 @@ const PROBE_TTL_MS = 10 * 60 * 1000;
 // auth failure has been observed.
 const AUTH_RETRY_COOLDOWN_MS = 60 * 1000;
 const DEFAULT_FAMILY_ORDER: ModelFamily[] = ["sonnet", "opus", "haiku"];
+
+// Self-exit threshold: once this many consecutive verifyAuth failures have
+// occurred, the proxy can no longer recover without outside help (credential
+// file is zombie or the account is locked). Exit so Docker's
+// `restart: unless-stopped` kicks us back up; the CLI re-reads creds on boot
+// and the subprocess pool re-warms, which is enough to escape most stuck
+// states without manual `make restart`.
+const AUTH_SELF_EXIT_THRESHOLD = 5;
 
 export interface ModelAvailabilitySnapshot {
   checkedAt: number;
@@ -45,9 +54,19 @@ class ModelAvailabilityManager {
   private snapshot: ModelAvailabilitySnapshot | null = null;
   private refreshPromise: Promise<ModelAvailabilitySnapshot> | null = null;
   private lastAuthRetryAt = 0;
+  private consecutiveAuthFailures = 0;
 
   getCachedSnapshot(): ModelAvailabilitySnapshot | null {
     return this.snapshot;
+  }
+
+  /**
+   * Count of consecutive `refresh()` calls that came back with an auth
+   * failure. Resets to 0 on the first successful `verifyAuth`. Exposed so
+   * `/health` can fail when the credential file looks zombie.
+   */
+  getConsecutiveAuthFailures(): number {
+    return this.consecutiveAuthFailures;
   }
 
   invalidate(): void {
@@ -137,6 +156,18 @@ class ModelAvailabilityManager {
     const definitions = getModelDefinitions();
 
     if (!authResult.ok) {
+      this.consecutiveAuthFailures += 1;
+      if (this.consecutiveAuthFailures >= AUTH_SELF_EXIT_THRESHOLD) {
+        log("auth.failure", {
+          phase: "self_exit",
+          consecutiveAuthFailures: this.consecutiveAuthFailures,
+          message:
+            "verifyAuth failed consecutively; exiting so the container restarts and re-reads credentials",
+        });
+        // Let Docker's restart policy bring us back. Small delay so the log
+        // has a chance to flush before the process dies.
+        setTimeout(() => process.exit(1), 250);
+      }
       return {
         checkedAt: Date.now(),
         auth: authResult.status ?? null,
@@ -152,6 +183,8 @@ class ModelAvailabilityManager {
         })),
       };
     }
+
+    this.consecutiveAuthFailures = 0;
 
     const probes = await Promise.all(
       definitions.map(async (definition) => ({
