@@ -135,7 +135,7 @@ export function classifyClaudeError(
   }
 
   if (
-    /not authenticated|auth login|authentication|logged out|oauth|token/i.test(
+    /not authenticated|auth login|authentication|logged out|oauth|token|"authentication_error"|invalid authentication credentials|status:\s*401|http\s*401|\b401\s+unauthorized\b|\b401\s+\{/i.test(
       lower,
     )
   ) {

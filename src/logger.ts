@@ -32,7 +32,10 @@ export type LogEvent =
   | "admin.thinking_budget.cleared"
   | "auth.proactive_refresh"
   | "auth.failure"
-  | "auth.recovered";
+  | "auth.recovered"
+  | "cli.error"
+  | "pool.warmed"
+  | "pool.warm_failed";
 
 export interface LogEntry {
   ts: string;

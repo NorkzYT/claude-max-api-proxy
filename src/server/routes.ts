@@ -921,6 +921,14 @@ function runStreamingSubprocess(opts: StreamOpts): Promise<{
         lastAssistantError,
       );
       if (cliError) {
+        log("cli.error", {
+          requestId,
+          conversationId: cliInput._conversationId,
+          classifiedStatus: cliError.status,
+          classifiedCode: cliError.code,
+          rawResult: (result?.result || "").slice(0, 500),
+          assistantError: lastAssistantError,
+        });
         log("request.error", {
           requestId,
           conversationId: cliInput._conversationId,
@@ -1327,6 +1335,14 @@ async function runNonStreamingSubprocess(
           lastAssistantError,
         );
         if (cliError) {
+          log("cli.error", {
+            requestId,
+            conversationId: cliInput._conversationId,
+            classifiedStatus: cliError.status,
+            classifiedCode: cliError.code,
+            rawResult: (finalResult?.result || "").slice(0, 500),
+            assistantError: lastAssistantError,
+          });
           log("request.error", {
             requestId,
             conversationId: cliInput._conversationId,

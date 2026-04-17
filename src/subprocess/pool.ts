@@ -6,9 +6,14 @@
 import { spawn } from "child_process";
 import { getCleanClaudeEnv } from "../claude-cli.inspect.js";
 import { tokenGate } from "../auth/token-gate.js";
+import { log, logError } from "../logger.js";
 
 const POOL_SIZE = 5;
 const WARMUP_INTERVAL_MS = 30 * 1000;
+// Only log warm success when the duration spikes past this threshold. The
+// per-cycle happy-path success fires every 30s and has zero diagnostic
+// value — it buried structured events in `docker logs`.
+const WARM_SLOW_THRESHOLD_MS = 2000;
 
 class SubprocessPool {
   private warmedAt = 0;
@@ -29,11 +34,16 @@ class SubprocessPool {
         await this.warmDeep();
       }
       this.warmedAt = Date.now();
-      console.log(
-        `[SubprocessPool] Warmed ${POOL_SIZE} processes${isInitial ? " + deep warm" : ""} in ${Date.now() - start}ms`,
-      );
+      const durationMs = Date.now() - start;
+      if (isInitial || durationMs >= WARM_SLOW_THRESHOLD_MS) {
+        log("pool.warmed", {
+          poolSize: POOL_SIZE,
+          deepWarm: isInitial,
+          durationMs,
+        });
+      }
     } catch (err) {
-      console.error("[SubprocessPool] Warm error:", err);
+      logError("pool.warm_failed", err, { poolSize: POOL_SIZE });
     } finally {
       this.warming = false;
     }
@@ -134,12 +144,12 @@ export const subprocessPool = new SubprocessPool();
 
 subprocessPool
   .warm()
-  .catch((err) => console.error("[SubprocessPool] Initial warm error:", err));
+  .catch((err) => logError("pool.warm_failed", err, { phase: "initial" }));
 
 setInterval(() => {
   if (!subprocessPool.isWarm()) {
     subprocessPool
       .warm()
-      .catch((err) => console.error("[SubprocessPool] Re-warm error:", err));
+      .catch((err) => logError("pool.warm_failed", err, { phase: "interval" }));
   }
 }, WARMUP_INTERVAL_MS);
