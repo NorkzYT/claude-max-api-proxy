@@ -27,16 +27,71 @@ export interface ModelDefinition {
  */
 const MODEL_DEFINITIONS: ModelDefinition[] = [
   // Opus — current model first (becomes canonical via CANONICAL_IDS)
-  { id: "claude-opus-4-6", family: "opus",   alias: "opus",   timeoutMs: 1800000, stallTimeoutMs: 120000 },
-  { id: "claude-opus-4",   family: "opus",   alias: "opus",   timeoutMs: 1800000, stallTimeoutMs: 120000 },
-  { id: "claude-opus-4-5", family: "opus",   alias: "opus",   timeoutMs: 1800000, stallTimeoutMs: 120000 },
+  {
+    id: "claude-opus-4-7",
+    family: "opus",
+    alias: "opus",
+    timeoutMs: 1800000,
+    stallTimeoutMs: 120000,
+  },
+  {
+    id: "claude-opus-4-6",
+    family: "opus",
+    alias: "opus",
+    timeoutMs: 1800000,
+    stallTimeoutMs: 120000,
+  },
+  {
+    id: "claude-opus-4",
+    family: "opus",
+    alias: "opus",
+    timeoutMs: 1800000,
+    stallTimeoutMs: 120000,
+  },
+  {
+    id: "claude-opus-4-5",
+    family: "opus",
+    alias: "opus",
+    timeoutMs: 1800000,
+    stallTimeoutMs: 120000,
+  },
   // Sonnet — current model first
-  { id: "claude-sonnet-4-6", family: "sonnet", alias: "sonnet", timeoutMs: 600000, stallTimeoutMs: 90000 },
-  { id: "claude-sonnet-4",   family: "sonnet", alias: "sonnet", timeoutMs: 600000, stallTimeoutMs: 90000 },
-  { id: "claude-sonnet-4-5", family: "sonnet", alias: "sonnet", timeoutMs: 600000, stallTimeoutMs: 90000 },
+  {
+    id: "claude-sonnet-4-6",
+    family: "sonnet",
+    alias: "sonnet",
+    timeoutMs: 600000,
+    stallTimeoutMs: 90000,
+  },
+  {
+    id: "claude-sonnet-4",
+    family: "sonnet",
+    alias: "sonnet",
+    timeoutMs: 600000,
+    stallTimeoutMs: 90000,
+  },
+  {
+    id: "claude-sonnet-4-5",
+    family: "sonnet",
+    alias: "sonnet",
+    timeoutMs: 600000,
+    stallTimeoutMs: 90000,
+  },
   // Haiku — current model first
-  { id: "claude-haiku-4-5", family: "haiku", alias: "haiku", timeoutMs: 120000, stallTimeoutMs: 45000 },
-  { id: "claude-haiku-4",   family: "haiku", alias: "haiku", timeoutMs: 120000, stallTimeoutMs: 45000 },
+  {
+    id: "claude-haiku-4-5",
+    family: "haiku",
+    alias: "haiku",
+    timeoutMs: 120000,
+    stallTimeoutMs: 45000,
+  },
+  {
+    id: "claude-haiku-4",
+    family: "haiku",
+    alias: "haiku",
+    timeoutMs: 120000,
+    stallTimeoutMs: 45000,
+  },
 ];
 
 // Provider prefixes that clients may prepend
@@ -69,7 +124,7 @@ for (const def of MODEL_DEFINITIONS) {
 
 // Bare aliases: "opus" -> opus, "sonnet" -> sonnet, "haiku" -> haiku
 for (const family of ["opus", "sonnet", "haiku"] as const) {
-  const def = MODEL_DEFINITIONS.find(d => d.family === family);
+  const def = MODEL_DEFINITIONS.find((d) => d.family === family);
   if (def) {
     MODEL_LOOKUP.set(family, {
       id: def.id,
@@ -127,8 +182,8 @@ export function getModelTimeout(model: string): number {
   if (entry) return entry.timeoutMs;
 
   const lower = (model || "").toLowerCase();
-  if (lower.includes("opus"))   return 1800000;
-  if (lower.includes("haiku"))  return 120000;
+  if (lower.includes("opus")) return 1800000;
+  if (lower.includes("haiku")) return 120000;
   if (lower.includes("sonnet")) return 600000;
 
   return 180000;
@@ -143,8 +198,8 @@ export function getStallTimeout(model: string): number {
   if (entry) return entry.stallTimeoutMs;
 
   const lower = (model || "").toLowerCase();
-  if (lower.includes("opus"))   return 120000;
-  if (lower.includes("haiku"))  return 45000;
+  if (lower.includes("opus")) return 120000;
+  if (lower.includes("haiku")) return 45000;
   if (lower.includes("sonnet")) return 90000;
 
   return 90000;
@@ -171,17 +226,19 @@ for (const def of MODEL_DEFINITIONS) {
 export function normalizeModelName(model: string): string {
   if (!model) return CANONICAL_IDS.sonnet!;
   const lower = model.toLowerCase();
-  if (lower.includes("opus"))   return CANONICAL_IDS.opus!;
+  if (lower.includes("opus")) return CANONICAL_IDS.opus!;
   if (lower.includes("sonnet")) return CANONICAL_IDS.sonnet!;
-  if (lower.includes("haiku"))  return CANONICAL_IDS.haiku!;
+  if (lower.includes("haiku")) return CANONICAL_IDS.haiku!;
   return model;
 }
 
 /**
  * Get the OpenAI-compatible /v1/models response data.
  */
-export function getModelList(definitions: ModelDefinition[] = MODEL_DEFINITIONS): Array<{ id: string; object: string; owned_by: string; created: number }> {
-  return definitions.map(def => ({
+export function getModelList(
+  definitions: ModelDefinition[] = MODEL_DEFINITIONS,
+): Array<{ id: string; object: string; owned_by: string; created: number }> {
+  return definitions.map((def) => ({
     id: def.id,
     object: "model" as const,
     owned_by: "anthropic",

@@ -1,8 +1,35 @@
-import { probeModelAvailability, verifyAuth, type ClaudeAuthStatus, type ClaudeProxyError } from "./claude-cli.inspect.js";
-import { getModelDefinitions, getModelList, resolveModelFamily, type ModelDefinition, type ModelFamily } from "./models.js";
+import {
+  probeModelAvailability,
+  verifyAuth,
+  type ClaudeAuthStatus,
+  type ClaudeProxyError,
+} from "./claude-cli.inspect.js";
+import {
+  getModelDefinitions,
+  getModelList,
+  resolveModelFamily,
+  type ModelDefinition,
+  type ModelFamily,
+} from "./models.js";
+import { log } from "./logger.js";
 
 const PROBE_TTL_MS = 10 * 60 * 1000;
+// When verifyAuth fails, normally the PROBE_TTL_MS cache would hold the
+// "no models available" state for 10 minutes even though a fresh token
+// refresh might succeed. To avoid sticking requests behind that cache, we
+// force a refresh attempt at most once every AUTH_RETRY_COOLDOWN_MS when an
+// auth failure has been observed.
+const AUTH_RETRY_COOLDOWN_MS = 60 * 1000;
 const DEFAULT_FAMILY_ORDER: ModelFamily[] = ["sonnet", "opus", "haiku"];
+
+// Self-exit threshold: once this many consecutive verifyAuth failures have
+// occurred, the proxy can no longer recover without outside help (credential
+// file is zombie or the account is locked). Exit so Docker's
+// `restart: unless-stopped` kicks us back up; the CLI re-reads creds on boot
+// and the subprocess pool re-warms, which is enough to escape most stuck
+// states without manual `make restart`.
+const AUTH_SELF_EXIT_THRESHOLD = 5;
+const AUTH_SELF_EXIT_DELAY_MS = 250;
 
 export interface ModelAvailabilitySnapshot {
   checkedAt: number;
@@ -14,7 +41,9 @@ export interface ModelAvailabilitySnapshot {
   }>;
 }
 
-function pickDefaultModel(available: ModelDefinition[]): ModelDefinition | null {
+function pickDefaultModel(
+  available: ModelDefinition[],
+): ModelDefinition | null {
   for (const family of DEFAULT_FAMILY_ORDER) {
     const match = available.find((definition) => definition.family === family);
     if (match) return match;
@@ -22,21 +51,86 @@ function pickDefaultModel(available: ModelDefinition[]): ModelDefinition | null 
   return available[0] ?? null;
 }
 
-class ModelAvailabilityManager {
+interface ModelAvailabilityDeps {
+  verifyAuth: typeof verifyAuth;
+  probeModelAvailability: typeof probeModelAvailability;
+  getModelDefinitions: typeof getModelDefinitions;
+  exitProcess: (code: number) => void;
+}
+
+const defaultDeps: ModelAvailabilityDeps = {
+  verifyAuth,
+  probeModelAvailability,
+  getModelDefinitions,
+  exitProcess: (code) => {
+    process.exit(code);
+  },
+};
+
+export class ModelAvailabilityManager {
   private snapshot: ModelAvailabilitySnapshot | null = null;
   private refreshPromise: Promise<ModelAvailabilitySnapshot> | null = null;
+  private lastAuthRetryAt = 0;
+  private consecutiveAuthFailures = 0;
+  private selfExitTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(private readonly deps: ModelAvailabilityDeps = defaultDeps) {}
 
   getCachedSnapshot(): ModelAvailabilitySnapshot | null {
     return this.snapshot;
+  }
+
+  /**
+   * Count of consecutive `refresh()` calls that came back with an auth
+   * failure. Resets to 0 on the first successful `verifyAuth`. Exposed so
+   * `/health` can fail when the credential file looks zombie.
+   */
+  getConsecutiveAuthFailures(): number {
+    return this.consecutiveAuthFailures;
   }
 
   invalidate(): void {
     this.snapshot = null;
   }
 
+  private scheduleSelfExit(): void {
+    if (this.selfExitTimer) return;
+    this.selfExitTimer = setTimeout(() => {
+      this.selfExitTimer = null;
+      this.deps.exitProcess(1);
+    }, AUTH_SELF_EXIT_DELAY_MS);
+    if (typeof this.selfExitTimer.unref === "function") {
+      this.selfExitTimer.unref();
+    }
+  }
+
+  private clearSelfExit(): void {
+    if (!this.selfExitTimer) return;
+    clearTimeout(this.selfExitTimer);
+    this.selfExitTimer = null;
+  }
+
+  /**
+   * When the last snapshot shows the CLI as unauthenticated, the generic
+   * PROBE_TTL_MS (10 min) cache keeps returning "no models" even after a
+   * successful token refresh. Bypass the cache at most once per
+   * AUTH_RETRY_COOLDOWN_MS so a healed token is picked up quickly without
+   * hammering verifyAuth on every request.
+   */
+  private shouldForceAuthRetry(): boolean {
+    if (!this.snapshot) return false;
+    if (this.snapshot.auth?.loggedIn) return false;
+    return Date.now() - this.lastAuthRetryAt >= AUTH_RETRY_COOLDOWN_MS;
+  }
+
   async getSnapshot(force = false): Promise<ModelAvailabilitySnapshot> {
-    const isFresh = this.snapshot && (Date.now() - this.snapshot.checkedAt) < PROBE_TTL_MS;
-    if (!force && isFresh) {
+    const isFresh =
+      this.snapshot && Date.now() - this.snapshot.checkedAt < PROBE_TTL_MS;
+    const authRetry = this.shouldForceAuthRetry();
+    if (authRetry) {
+      this.lastAuthRetryAt = Date.now();
+    }
+    if (!force && !authRetry && isFresh) {
       return this.snapshot!;
     }
 
@@ -53,12 +147,16 @@ class ModelAvailabilityManager {
     }
   }
 
-  async getPublicModelList(): Promise<Array<{ id: string; object: string; owned_by: string; created: number }>> {
+  async getPublicModelList(): Promise<
+    Array<{ id: string; object: string; owned_by: string; created: number }>
+  > {
     const snapshot = await this.getSnapshot();
     return getModelList(snapshot.available);
   }
 
-  async resolveRequestedModel(requestedModel?: string): Promise<ModelDefinition | null> {
+  async resolveRequestedModel(
+    requestedModel?: string,
+  ): Promise<ModelDefinition | null> {
     const snapshot = await this.getSnapshot();
     if (snapshot.available.length === 0) {
       return null;
@@ -74,7 +172,9 @@ class ModelAvailabilityManager {
         ? requestedModel.slice("claude-code-cli/".length)
         : requestedModel;
 
-    const exact = snapshot.available.find((definition) => definition.id === normalized);
+    const exact = snapshot.available.find(
+      (definition) => definition.id === normalized,
+    );
     if (exact) return exact;
 
     const family = resolveModelFamily(normalized);
@@ -82,14 +182,28 @@ class ModelAvailabilityManager {
       return null;
     }
 
-    return snapshot.available.find((definition) => definition.family === family) ?? null;
+    return (
+      snapshot.available.find((definition) => definition.family === family) ??
+      null
+    );
   }
 
   private async refresh(): Promise<ModelAvailabilitySnapshot> {
-    const authResult = await verifyAuth();
-    const definitions = getModelDefinitions();
+    const authResult = await this.deps.verifyAuth();
+    const definitions = this.deps.getModelDefinitions();
 
     if (!authResult.ok) {
+      this.consecutiveAuthFailures += 1;
+      if (this.consecutiveAuthFailures >= AUTH_SELF_EXIT_THRESHOLD) {
+        log("auth.failure", {
+          phase: "self_exit",
+          consecutiveAuthFailures: this.consecutiveAuthFailures,
+          message:
+            "verifyAuth failed consecutively; exiting so the container restarts and re-reads credentials",
+        });
+        // Small delay so the log has a chance to flush before the process dies.
+        this.scheduleSelfExit();
+      }
       return {
         checkedAt: Date.now(),
         auth: authResult.status ?? null,
@@ -106,10 +220,15 @@ class ModelAvailabilityManager {
       };
     }
 
-    const probes = await Promise.all(definitions.map(async (definition) => ({
-      definition,
-      result: await probeModelAvailability(definition.id),
-    })));
+    this.consecutiveAuthFailures = 0;
+    this.clearSelfExit();
+
+    const probes = await Promise.all(
+      definitions.map(async (definition) => ({
+        definition,
+        result: await this.deps.probeModelAvailability(definition.id),
+      })),
+    );
 
     const available: ModelDefinition[] = [];
     const unavailable: ModelAvailabilitySnapshot["unavailable"] = [];

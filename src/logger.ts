@@ -29,7 +29,13 @@ export type LogEvent =
   | "server.shutdown"
   | "server.start"
   | "admin.thinking_budget.set"
-  | "admin.thinking_budget.cleared";
+  | "admin.thinking_budget.cleared"
+  | "auth.proactive_refresh"
+  | "auth.failure"
+  | "auth.recovered"
+  | "cli.error"
+  | "pool.warmed"
+  | "pool.warm_failed";
 
 export interface LogEntry {
   ts: string;

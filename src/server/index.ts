@@ -14,6 +14,10 @@ import {
   handleSetThinkingBudget,
 } from "./routes.js";
 import { runtimeConfig } from "../config.js";
+import {
+  startProactiveRefresh,
+  stopProactiveRefresh,
+} from "../auth/proactive-refresh.js";
 import "../subprocess/pool.js";
 import "../store/conversation.js";
 
@@ -119,6 +123,13 @@ export async function startServer(config: ServerConfig): Promise<Server> {
       console.log(
         `[Server] OpenAI-compatible endpoint: http://${host}:${port}/v1/chat/completions`,
       );
+      // Defense-in-depth against refresh_token rotation races: proactively
+      // drive a token refresh when the access_token is approaching expiry
+      // during an otherwise-quiet interval. Only started from startServer
+      // so unit tests (which never call startServer) don't kick this off.
+      if (process.env.NODE_ENV !== "test") {
+        startProactiveRefresh();
+      }
       resolve(serverInstance!);
     });
   });
@@ -127,6 +138,7 @@ export async function startServer(config: ServerConfig): Promise<Server> {
 export async function stopServer(): Promise<void> {
   if (!serverInstance) return;
   return new Promise<void>((resolve, reject) => {
+    stopProactiveRefresh();
     serverInstance!.close((err) => {
       if (err) {
         reject(err);

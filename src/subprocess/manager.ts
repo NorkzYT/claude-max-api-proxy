@@ -25,9 +25,11 @@ import type { ClaudeModel } from "../adapter/openai-to-cli.js";
 import { log } from "../logger.js";
 import {
   getCleanClaudeEnv,
+  supportsXHighEffort,
   verifyClaude,
   verifyAuth,
 } from "../claude-cli.inspect.js";
+import { tokenGate } from "../auth/token-gate.js";
 
 const KILL_ESCALATION_MS = 5000;
 
@@ -96,11 +98,15 @@ export const subprocessRegistry = new SubprocessRegistry();
  * The CLI no longer accepts a raw token count; only level names.
  *
  * Thresholds chosen to line up with the REASONING_EFFORT_MAP in routes.ts:
- *   low = 5000, medium = 10000, high = 32000, max > 32000
+ *   low = 5000, medium = 10000, high = 32000, xhigh = 48000, max = 64000
  */
-function thinkingBudgetToEffort(budget: number): string | undefined {
+export function thinkingBudgetToEffort(
+  budget: number,
+  xhighSupported = supportsXHighEffort(),
+): string | undefined {
   if (!Number.isFinite(budget) || budget <= 0) return undefined;
-  if (budget > 32000) return "max";
+  if (budget > 48000) return "max";
+  if (budget > 32000) return xhighSupported ? "xhigh" : "max";
   if (budget > 10000) return "high";
   if (budget > 5000) return "medium";
   return "low";
@@ -115,76 +121,106 @@ export class ClaudeSubprocess extends EventEmitter {
   /**
    * Start the Claude CLI subprocess with the given prompt.
    * No timeout is set here — caller owns timeout behavior (Phase 1c).
+   *
+   * Token-gate semantics: spawns are serialized by `tokenGate` when the OAuth
+   * refresh window is active. The gate MUST hold the mutex until this
+   * subprocess has fully exited (close event) — otherwise two processes could
+   * each trigger a refresh and race on refresh_token rotation. We achieve
+   * that by having the gated fn's promise only resolve from the `close`
+   * handler. The caller's `start()` promise, by contrast, resolves as soon
+   * as the subprocess has been spawned so listeners keep working normally.
    */
   async start(prompt: string, options: SubprocessOptions): Promise<void> {
     const { args, prompt: finalPrompt } = this.buildArgs(prompt, options);
 
-    return new Promise<void>((resolve, reject) => {
-      try {
-        this.process = spawn("claude", args, {
-          cwd: options.cwd || process.cwd(),
-          env: getCleanClaudeEnv(),
-          stdio: ["pipe", "pipe", "pipe"],
-        });
+    return new Promise<void>((startResolve, startReject) => {
+      // The promise returned here is what runGated will await: resolved only
+      // on child close (or on spawn error). That keeps the mutex held for
+      // the full subprocess lifetime.
+      const gated = tokenGate.runGated<void>(
+        () =>
+          new Promise<void>((lifecycleResolve) => {
+            try {
+              this.process = spawn("claude", args, {
+                cwd: options.cwd || process.cwd(),
+                env: getCleanClaudeEnv(),
+                stdio: ["pipe", "pipe", "pipe"],
+              });
 
-        this.process.on("error", (err: NodeJS.ErrnoException) => {
-          if (err.code === "ENOENT") {
-            reject(
-              new Error(
-                "Claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code",
-              ),
-            );
-          } else {
-            reject(err);
-          }
-        });
+              this.process.on("error", (err: NodeJS.ErrnoException) => {
+                const mapped =
+                  err.code === "ENOENT"
+                    ? new Error(
+                        "Claude CLI not found. Install with: npm install -g @anthropic-ai/claude-code",
+                      )
+                    : err;
+                startReject(mapped);
+                // Release the gate so queued spawns don't stall forever when
+                // the binary is missing or spawn failed.
+                lifecycleResolve();
+              });
 
-        // Pipe the prompt through stdin. Passing large prompts as argv
-        // (OpenClaw system prompts + history) hits the kernel's ARG_MAX
-        // limit and spawn() fails with E2BIG.
-        this.process.stdin?.write(finalPrompt);
-        this.process.stdin?.end();
+              // Pipe the prompt through stdin. Passing large prompts as argv
+              // (OpenClaw system prompts + history) hits the kernel's ARG_MAX
+              // limit and spawn() fails with E2BIG.
+              this.process.stdin?.write(finalPrompt);
+              this.process.stdin?.end();
 
-        const pid = this.process.pid;
-        const effort = options.thinkingBudget
-          ? thinkingBudgetToEffort(options.thinkingBudget)
-          : undefined;
-        log("subprocess.spawn", {
-          pid,
-          model: options.model,
-          thinking: effort ?? "off",
-          thinkingTokens: options.thinkingBudget ?? 0,
-          sessionId: options.sessionId?.slice(0, 8),
-          resume: options.isResume,
-        });
+              const pid = this.process.pid;
+              const effort = options.thinkingBudget
+                ? thinkingBudgetToEffort(options.thinkingBudget)
+                : undefined;
+              log("subprocess.spawn", {
+                pid,
+                model: options.model,
+                thinking: effort ?? "off",
+                thinkingTokens: options.thinkingBudget ?? 0,
+                sessionId: options.sessionId?.slice(0, 8),
+                resume: options.isResume,
+              });
 
-        subprocessRegistry.register(this);
+              subprocessRegistry.register(this);
 
-        this.process.stdout?.on("data", (chunk: Buffer) => {
-          this.buffer += chunk.toString();
-          this.processBuffer();
-        });
+              this.process.stdout?.on("data", (chunk: Buffer) => {
+                this.buffer += chunk.toString();
+                this.processBuffer();
+              });
 
-        this.process.stderr?.on("data", (chunk: Buffer) => {
-          const errorText = chunk.toString().trim();
-          if (errorText && process.env.DEBUG) {
-            console.error("[Subprocess stderr]:", errorText.slice(0, 200));
-          }
-        });
+              this.process.stderr?.on("data", (chunk: Buffer) => {
+                const errorText = chunk.toString().trim();
+                if (errorText && process.env.DEBUG) {
+                  console.error(
+                    "[Subprocess stderr]:",
+                    errorText.slice(0, 200),
+                  );
+                }
+              });
 
-        this.process.on("close", (code: number | null) => {
-          log("subprocess.close", { pid: this.process?.pid, code });
-          subprocessRegistry.unregister(this);
-          if (this.buffer.trim()) {
-            this.processBuffer();
-          }
-          this.emit("close", code);
-        });
+              this.process.on("close", (code: number | null) => {
+                log("subprocess.close", { pid: this.process?.pid, code });
+                subprocessRegistry.unregister(this);
+                if (this.buffer.trim()) {
+                  this.processBuffer();
+                }
+                this.emit("close", code);
+                // Release the token gate only after the child has exited,
+                // guaranteeing no other gated spawn starts while this one
+                // might still be driving a refresh.
+                lifecycleResolve();
+              });
 
-        resolve();
-      } catch (err) {
-        reject(err);
-      }
+              startResolve();
+            } catch (err) {
+              startReject(err as Error);
+              lifecycleResolve();
+            }
+          }),
+      );
+      // Surface any unexpected gate-path errors (should not happen — the
+      // lifecycle promise never rejects) so they don't become unhandled.
+      gated.catch(() => {
+        /* noop: rejection path already delivered via startReject */
+      });
     });
   }
 

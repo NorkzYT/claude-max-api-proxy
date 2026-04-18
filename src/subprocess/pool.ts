@@ -5,9 +5,19 @@
  */
 import { spawn } from "child_process";
 import { getCleanClaudeEnv } from "../claude-cli.inspect.js";
+import { tokenGate } from "../auth/token-gate.js";
+import { log, logError } from "../logger.js";
+import { createEscalatedStop } from "./stop-with-escalation.js";
 
 const POOL_SIZE = 5;
 const WARMUP_INTERVAL_MS = 30 * 1000;
+const WARM_DEEP_TIMEOUT_MS = 10_000;
+const WARM_DEEP_KILL_GRACE_MS = 5_000;
+const WARM_DEEP_FORCE_RELEASE_MS = 1_000;
+// Only log warm success when the duration spikes past this threshold. The
+// per-cycle happy-path success fires every 30s and has zero diagnostic
+// value — it buried structured events in `docker logs`.
+const WARM_SLOW_THRESHOLD_MS = 2000;
 
 class SubprocessPool {
   private warmedAt = 0;
@@ -28,9 +38,16 @@ class SubprocessPool {
         await this.warmDeep();
       }
       this.warmedAt = Date.now();
-      console.log(`[SubprocessPool] Warmed ${POOL_SIZE} processes${isInitial ? " + deep warm" : ""} in ${Date.now() - start}ms`);
+      const durationMs = Date.now() - start;
+      if (isInitial || durationMs >= WARM_SLOW_THRESHOLD_MS) {
+        log("pool.warmed", {
+          poolSize: POOL_SIZE,
+          deepWarm: isInitial,
+          durationMs,
+        });
+      }
     } catch (err) {
-      console.error("[SubprocessPool] Warm error:", err);
+      logError("pool.warm_failed", err, { poolSize: POOL_SIZE });
     } finally {
       this.warming = false;
     }
@@ -38,46 +55,78 @@ class SubprocessPool {
 
   private spawnQuick(): Promise<void> {
     return new Promise<void>((resolve) => {
-      const proc = spawn("claude", ["--version"], { stdio: "pipe", env: getCleanClaudeEnv() });
+      const proc = spawn("claude", ["--version"], {
+        stdio: "pipe",
+        env: getCleanClaudeEnv(),
+      });
       proc.on("close", () => resolve());
       proc.on("error", () => resolve());
       setTimeout(() => {
-        try { proc.kill(); } catch { /* ignore */ }
+        try {
+          proc.kill();
+        } catch {
+          /* ignore */
+        }
         resolve();
       }, 5000);
     });
   }
 
   private warmDeep(): Promise<void> {
-    return new Promise<void>((resolve) => {
-      try {
-        const proc = spawn("claude", [
-          "--print", "--output-format", "stream-json",
-          "--model", "haiku",
-          "hi",
-        ], { stdio: "pipe", env: getCleanClaudeEnv() });
-        let done = false;
-        const finish = (): void => {
-          if (done) return;
-          done = true;
-          try { proc.kill(); } catch { /* ignore */ }
-          resolve();
-        };
-        proc.stdout?.on("data", finish);
-        proc.on("close", finish);
-        proc.on("error", finish);
-        setTimeout(finish, 10000);
-      } catch {
-        resolve();
-      }
-    });
+    // warmDeep is auth-touching (spawns `claude --print ...`) so route it
+    // through the token gate. Outside the refresh window this is a no-op;
+    // inside the window it serializes with request-path spawns so only one
+    // subprocess can drive the refresh_token rotation at a time.
+    return tokenGate.runGated<void>(
+      () =>
+        new Promise<void>((resolve) => {
+          try {
+            const proc = spawn(
+              "claude",
+              [
+                "--print",
+                "--output-format",
+                "stream-json",
+                "--model",
+                "haiku",
+                "hi",
+              ],
+              { stdio: "pipe", env: getCleanClaudeEnv() },
+            );
+            const stopper = createEscalatedStop(
+              proc,
+              resolve,
+              WARM_DEEP_KILL_GRACE_MS,
+              WARM_DEEP_FORCE_RELEASE_MS,
+            );
+            const timeoutId = setTimeout(
+              stopper.requestStop,
+              WARM_DEEP_TIMEOUT_MS,
+            );
+            const clearTimeouts = (): void => clearTimeout(timeoutId);
+            proc.once("close", clearTimeouts);
+            proc.once("error", () => {
+              clearTimeouts();
+              stopper.settle();
+            });
+            proc.stdout?.on("data", stopper.requestStop);
+          } catch {
+            resolve();
+          }
+        }),
+    );
   }
 
   isWarm(): boolean {
-    return (Date.now() - this.warmedAt) < WARMUP_INTERVAL_MS;
+    return Date.now() - this.warmedAt < WARMUP_INTERVAL_MS;
   }
 
-  getStatus(): { warmedAt: string | null; isWarm: boolean; poolSize: number; warming: boolean } {
+  getStatus(): {
+    warmedAt: string | null;
+    isWarm: boolean;
+    poolSize: number;
+    warming: boolean;
+  } {
     return {
       warmedAt: this.warmedAt ? new Date(this.warmedAt).toISOString() : null,
       isWarm: this.isWarm(),
@@ -89,10 +138,14 @@ class SubprocessPool {
 
 export const subprocessPool = new SubprocessPool();
 
-subprocessPool.warm().catch(err => console.error("[SubprocessPool] Initial warm error:", err));
+subprocessPool
+  .warm()
+  .catch((err) => logError("pool.warm_failed", err, { phase: "initial" }));
 
 setInterval(() => {
   if (!subprocessPool.isWarm()) {
-    subprocessPool.warm().catch(err => console.error("[SubprocessPool] Re-warm error:", err));
+    subprocessPool
+      .warm()
+      .catch((err) => logError("pool.warm_failed", err, { phase: "interval" }));
   }
 }, WARMUP_INTERVAL_MS);

@@ -6,9 +6,14 @@ import type {
   ClaudeCliMessage,
   ClaudeCliResult,
 } from "./types/claude-cli.js";
+import { tokenGate } from "./auth/token-gate.js";
+import { createEscalatedStop } from "./subprocess/stop-with-escalation.js";
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 10000;
 const PROBE_PROMPT = "Reply with exactly: OK";
+const COMMAND_KILL_GRACE_MS = 5000;
+const COMMAND_FORCE_RELEASE_MS = 1000;
+const XHIGH_MIN_VERSION = { major: 2, minor: 1, patch: 112 } as const;
 
 const CLEAN_CLAUDE_ENV = (() => {
   const env = { ...process.env };
@@ -18,6 +23,9 @@ const CLEAN_CLAUDE_ENV = (() => {
   delete env.CLAUDE_CODE_PARENT;
   return env;
 })();
+
+let cachedClaudeVersion = process.env.CLAUDE_PROXY_CLAUDE_VERSION?.trim()
+  || undefined;
 
 export interface ClaudeCommandResult {
   stdout: string;
@@ -50,6 +58,39 @@ export interface ModelProbeResult {
 
 export function getCleanClaudeEnv(): NodeJS.ProcessEnv {
   return { ...CLEAN_CLAUDE_ENV };
+}
+
+export interface ClaudeCliVersion {
+  major: number;
+  minor: number;
+  patch: number;
+}
+
+export function parseClaudeVersion(
+  raw: string | undefined,
+): ClaudeCliVersion | null {
+  const match = raw?.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+  };
+}
+
+export function supportsXHighEffort(
+  version: string | undefined = cachedClaudeVersion,
+): boolean {
+  const parsed = parseClaudeVersion(version);
+  if (!parsed) return false;
+
+  if (parsed.major !== XHIGH_MIN_VERSION.major) {
+    return parsed.major > XHIGH_MIN_VERSION.major;
+  }
+  if (parsed.minor !== XHIGH_MIN_VERSION.minor) {
+    return parsed.minor > XHIGH_MIN_VERSION.minor;
+  }
+  return parsed.patch >= XHIGH_MIN_VERSION.patch;
 }
 
 export function parseClaudeJsonOutput(raw: string): ClaudeCliMessage[] {
@@ -134,7 +175,7 @@ export function classifyClaudeError(
   }
 
   if (
-    /not authenticated|auth login|authentication|logged out|oauth|token/i.test(
+    /not authenticated|auth login|authentication|logged out|oauth|token|"authentication_error"|invalid authentication credentials|status:\s*401|http\s*401|\b401\s+unauthorized\b|\b401\s+\{/i.test(
       lower,
     )
   ) {
@@ -217,43 +258,62 @@ export async function runClaudeCommand(
   args: string[],
   timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
 ): Promise<ClaudeCommandResult> {
-  return new Promise<ClaudeCommandResult>((resolve) => {
-    const proc = spawn("claude", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: getCleanClaudeEnv(),
-    });
+  // Serialize spawns during the OAuth refresh window so concurrent `claude`
+  // invocations can't race on refresh_token rotation. Outside the window the
+  // gate fast-paths with no overhead. The gated promise resolves on child
+  // EXIT (via close/error) so the mutex is held for the full lifetime.
+  return tokenGate.runGated(
+    () =>
+      new Promise<ClaudeCommandResult>((resolve) => {
+        const proc = spawn("claude", args, {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: getCleanClaudeEnv(),
+        });
 
-    let stdout = "";
-    let stderr = "";
-    let timedOut = false;
+        let stdout = "";
+        let stderr = "";
+        let timedOut = false;
+        let code: number | null = null;
+        let signal: NodeJS.Signals | null = null;
+        let settled = false;
 
-    const timeoutId = setTimeout(() => {
-      timedOut = true;
-      try {
-        proc.kill("SIGTERM");
-      } catch {
-        // ignore
-      }
-    }, timeoutMs);
+        const finalize = (): void => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeoutId);
+          resolve({ stdout, stderr, code, signal, timedOut });
+        };
 
-    proc.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
+        proc.on("close", (closeCode, closeSignal) => {
+          code = closeCode;
+          signal = closeSignal;
+        });
 
-    proc.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
+        const stopper = createEscalatedStop(
+          proc,
+          finalize,
+          COMMAND_KILL_GRACE_MS,
+          COMMAND_FORCE_RELEASE_MS,
+        );
 
-    proc.on("error", () => {
-      clearTimeout(timeoutId);
-      resolve({ stdout, stderr, code: null, signal: null, timedOut });
-    });
+        const timeoutId = setTimeout(() => {
+          timedOut = true;
+          stopper.requestStop();
+        }, timeoutMs);
 
-    proc.on("close", (code, signal) => {
-      clearTimeout(timeoutId);
-      resolve({ stdout, stderr, code, signal, timedOut });
-    });
-  });
+        proc.stdout?.on("data", (chunk: Buffer) => {
+          stdout += chunk.toString();
+        });
+
+        proc.stderr?.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString();
+        });
+
+        proc.on("error", () => {
+          stopper.settle();
+        });
+      }),
+  );
 }
 
 export async function verifyClaude(): Promise<{
@@ -263,8 +323,11 @@ export async function verifyClaude(): Promise<{
 }> {
   const result = await runClaudeCommand(["--version"], 5000);
   if (result.code === 0) {
-    return { ok: true, version: result.stdout.trim() };
+    const version = result.stdout.trim();
+    cachedClaudeVersion = version || undefined;
+    return { ok: true, version };
   }
+  cachedClaudeVersion = undefined;
   return {
     ok: false,
     error:
