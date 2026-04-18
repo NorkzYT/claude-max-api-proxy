@@ -18,6 +18,8 @@ import {
   startProactiveRefresh,
   stopProactiveRefresh,
 } from "../auth/proactive-refresh.js";
+import { scheduleSelfRestart } from "../auth/uptime-watchdog.js";
+import { tokenGate } from "../auth/token-gate.js";
 import "../subprocess/pool.js";
 import "../store/conversation.js";
 
@@ -129,6 +131,8 @@ export async function startServer(config: ServerConfig): Promise<Server> {
       // so unit tests (which never call startServer) don't kick this off.
       if (process.env.NODE_ENV !== "test") {
         startProactiveRefresh();
+        tokenGate.startCredentialsWatcher();
+        scheduleSelfRestart();
       }
       resolve(serverInstance!);
     });
@@ -139,6 +143,7 @@ export async function stopServer(): Promise<void> {
   if (!serverInstance) return;
   return new Promise<void>((resolve, reject) => {
     stopProactiveRefresh();
+    tokenGate.stopCredentialsWatcher();
     serverInstance!.close((err) => {
       if (err) {
         reject(err);

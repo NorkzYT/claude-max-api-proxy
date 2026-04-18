@@ -33,9 +33,14 @@ export type LogEvent =
   | "auth.proactive_refresh"
   | "auth.failure"
   | "auth.recovered"
+  | "auth.gate_entered"
+  | "auth.gate_released"
+  | "auth.gate_contended"
+  | "auth.credentials_changed"
   | "cli.error"
   | "pool.warmed"
-  | "pool.warm_failed";
+  | "pool.warm_failed"
+  | "server.self_restart";
 
 export interface LogEntry {
   ts: string;
