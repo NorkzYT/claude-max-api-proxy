@@ -29,8 +29,8 @@ export interface ProxyRuntimeConfig {
 }
 
 // Where runtime-mutable state (the admin-endpoint thinking budget override)
-// is persisted so it survives container restarts. Defaults next to the
-// SQLite DB; override with RUNTIME_STATE_FILE.
+// is persisted so it survives restarts. Defaults next to the SQLite DB;
+// override with RUNTIME_STATE_FILE.
 const DEFAULT_STATE_FILE = path.join(
   process.env.DB_PATH
     ? path.dirname(process.env.DB_PATH)

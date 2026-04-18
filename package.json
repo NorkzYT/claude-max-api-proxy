@@ -10,6 +10,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "ci": "npm run build && npm test",
     "dev": "tsc --watch",
     "start": "node dist/server/standalone.js",
     "test": "find dist -name '*.test.js' -print0 | xargs -0 node --test",
@@ -32,7 +33,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mattschwen/claude-max-api-proxy"
+    "url": "git+https://github.com/mattschwen/claude-max-api-proxy.git"
   },
   "bugs": {
     "url": "https://github.com/mattschwen/claude-max-api-proxy/issues"
@@ -63,6 +64,9 @@
     "dist",
     "docs",
     "README.md",
-    "CONTRIBUTING.md"
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md",
+    "SECURITY.md",
+    "LICENSE"
   ]
 }

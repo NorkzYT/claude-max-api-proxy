@@ -95,7 +95,11 @@ const MODEL_DEFINITIONS: ModelDefinition[] = [
 ];
 
 // Provider prefixes that clients may prepend
-const PROVIDER_PREFIXES = ["maxproxy/", "claude-code-cli/"];
+const PROVIDER_PREFIXES = [
+  "maxproxy/",
+  "claude-code-cli/",
+  "claude-max-api-proxy/",
+];
 
 interface ModelLookupEntry {
   id: string;

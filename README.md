@@ -10,6 +10,7 @@
 <p>
   <a href="#quickstart"><img alt="quickstart" src="https://img.shields.io/badge/quickstart-60s-ff7a3c?style=flat-square&labelColor=1a0f1e"></a>
   <a href="./LICENSE"><img alt="license" src="https://img.shields.io/badge/license-MIT-f5efe7?style=flat-square&labelColor=1a0f1e"></a>
+  <img alt="ci" src="https://img.shields.io/github/actions/workflow/status/mattschwen/claude-max-api-proxy/ci.yml?branch=main&style=flat-square&label=ci&labelColor=1a0f1e">
   <img alt="node" src="https://img.shields.io/badge/node-%E2%89%A522-4ade80?style=flat-square&labelColor=1a0f1e">
   <img alt="typescript" src="https://img.shields.io/badge/typescript-strict-3178c6?style=flat-square&labelColor=1a0f1e">
   <img alt="status" src="https://img.shields.io/badge/status-production-16a34a?style=flat-square&labelColor=1a0f1e">
@@ -59,7 +60,7 @@ It runs a tiny local HTTP server on `127.0.0.1:3456`, translates OpenAI `/v1/cha
 
 ## Quickstart
 
-You need **Node.js 22+**, **npm**, and the **Claude Code CLI** already logged in.
+You need **Node.js 22+**, **npm**, and the **Claude Code CLI** already logged in. Docker is optional; the default install path is a normal source checkout.
 
 ```bash
 # 1. Install Claude CLI and log in (skip if you already have it)
@@ -70,6 +71,7 @@ claude auth login
 git clone https://github.com/mattschwen/claude-max-api-proxy.git
 cd claude-max-api-proxy
 npm install
+npm run build
 npm start
 ```
 
@@ -83,6 +85,9 @@ curl http://127.0.0.1:3456/v1/models
 
 > [!IMPORTANT]
 > If `/v1/models` returns `{"object":"list","data":[]}`, stop here. The proxy is running but your Claude CLI account can't access any models. Fix auth first — see [Troubleshooting](./docs/TROUBLESHOOTING.md).
+
+> [!NOTE]
+> Prefer a containerized deployment? See [docs/docker-setup.md](./docs/docker-setup.md). Docker is supported, but it is not required.
 
 ## Usage
 
@@ -206,8 +211,8 @@ npm start
 ## Running as a service
 
 - **macOS** → [docs/macos-setup.md](./docs/macos-setup.md) (LaunchAgent, auto-start, KeepAlive)
-- **Linux** → use systemd with a unit file that runs `node dist/server/standalone.js`
-- **Docker** → [docs/docker-setup.md](./docs/docker-setup.md)
+- **Linux** → [docs/linux-systemd.md](./docs/linux-systemd.md) (systemd user service)
+- **Docker (optional)** → [docs/docker-setup.md](./docs/docker-setup.md)
 
 ## Documentation
 
@@ -218,8 +223,10 @@ npm start
 | [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)       | How the proxy works internally — pool, queues, sessions, logging    |
 | [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) | Every failure mode and how to fix it                                |
 | [docs/macos-setup.md](./docs/macos-setup.md)         | LaunchAgent setup for auto-start on macOS                           |
-| [docs/docker-setup.md](./docs/docker-setup.md)       | Docker and Docker Compose setup                                     |
+| [docs/linux-systemd.md](./docs/linux-systemd.md)     | systemd user-service setup for Linux                                |
+| [docs/docker-setup.md](./docs/docker-setup.md)       | Optional Docker and Docker Compose setup                            |
 | [CONTRIBUTING.md](./CONTRIBUTING.md)                 | Dev setup, style, PR flow                                           |
+| [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)           | Community expectations and moderation policy                        |
 | [SECURITY.md](./SECURITY.md)                         | How to report security issues                                       |
 
 ## How it compares
@@ -246,12 +253,15 @@ npm start
 git clone https://github.com/mattschwen/claude-max-api-proxy.git
 cd claude-max-api-proxy
 npm install
-npm run build    # tsc → dist/
-npm test         # runs compiled tests under dist/
+npm run ci       # build + test
 npm start        # dist/server/standalone.js
 ```
 
 Source lives in `src/`, compiled output in `dist/` (gitignored). Tests live next to the code they test (`*.test.ts` → `dist/**/*.test.js`). See [CONTRIBUTING.md](./CONTRIBUTING.md) for more.
+
+## Community
+
+Issues and pull requests are welcome. Use the GitHub issue templates for bug reports and feature requests, read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a PR, and follow the expectations in [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
 
 ## Security
 
@@ -259,4 +269,4 @@ The proxy binds to `127.0.0.1` by default and trusts the local Claude CLI sessio
 
 ## License
 
-[MIT](./LICENSE) © Matt Schwen
+[MIT](./LICENSE)

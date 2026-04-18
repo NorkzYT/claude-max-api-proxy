@@ -10,6 +10,9 @@ All runtime configuration is driven by environment variables. Set them **before*
 | `CLAUDE_PROXY_DEBUG_QUEUES` | `false` | `true`, `false` | Emit extra structured log events for queue enqueue/drop/block/cancel. |
 | `CLAUDE_PROXY_ENABLE_ADMIN_API` | `false` | `true`, `false` | Mount `GET/POST/PUT /admin/thinking-budget` for live default-thinking changes. |
 | `DEFAULT_THINKING_BUDGET` | _(unset)_ | integer, `off`, `low`, `medium`, `high`, `max` | Server-wide fallback thinking budget when the client does not send one. |
+| `DB_PATH` | `~/.claude-proxy-conversations.db` | filesystem path | Location of the SQLite conversation database. |
+| `SESSION_FILE` | `~/.claude-code-cli-sessions.json` | filesystem path | Location of the conversation-to-session mapping file. |
+| `RUNTIME_STATE_FILE` | `dirname(DB_PATH)/runtime-state.json` | filesystem path | Location of persisted admin-endpoint runtime state. |
 | `HOST` | `127.0.0.1` | bind address | Network interface used by the standalone server. |
 | `PORT` (positional arg) | `3456` | any free port | Pass as `node dist/server/standalone.js <port>`. |
 
@@ -81,6 +84,9 @@ Then point clients at `http://127.0.0.1:8080/v1` for localhost use, or your chos
 
 > [!NOTE]
 > The safest default is to keep the server on `127.0.0.1`. If you set `HOST=0.0.0.0`, treat the proxy like an internal service and put network controls in front of it.
+
+> [!NOTE]
+> When you use `docker-compose.yml`, the `.env` `PORT` value controls the host-side published port only. The Node process still listens on `3456` inside the container.
 
 ## Timeouts
 

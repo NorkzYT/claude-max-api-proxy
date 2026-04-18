@@ -72,7 +72,7 @@ If the proxy starts on a completely cold CLI, the first `claude --print` invocat
 
 ```bash
 # macOS LaunchAgent
-launchctl kickstart -k gui/$(id -u)/com.claude-code-provider
+launchctl kickstart -k gui/$(id -u)/com.claude-max-api-proxy
 
 # Foreground
 # Just Ctrl-C and re-run `npm start`
@@ -176,13 +176,13 @@ The proxy emits one JSON object per line to stdout. To filter for a specific eve
 
 ```bash
 # Every request completion
-tail -f /tmp/claude-provider.log | grep '"event":"request.complete"'
+tail -f /tmp/claude-max-api-proxy.log | grep '"event":"request.complete"'
 
 # Every stall
-tail -f /tmp/claude-provider.log | grep '"event":"subprocess.stall"'
+tail -f /tmp/claude-max-api-proxy.log | grep '"event":"subprocess.stall"'
 
 # Everything for one conversation
-tail -f /tmp/claude-provider.log | grep '"conversationId":"chat-abc-123"'
+tail -f /tmp/claude-max-api-proxy.log | grep '"conversationId":"chat-abc-123"'
 ```
 
-If you're running under `launchd` on macOS, logs go to `/tmp/claude-provider.log` and `/tmp/claude-provider.err.log` per the LaunchAgent config in [macos-setup.md](./macos-setup.md).
+If you're running under `launchd` on macOS, logs go to `/tmp/claude-max-api-proxy.log` and `/tmp/claude-max-api-proxy.err.log` per the LaunchAgent config in [macos-setup.md](./macos-setup.md).

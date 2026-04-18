@@ -25,7 +25,7 @@ curl http://127.0.0.1:3456/health
 ```jsonc
 {
   "status": "ok",
-  "provider": "claude-code-cli",
+  "provider": "claude-max-api-proxy",
 
   "config": {
     "sameConversationPolicy": "latest-wins", // or "queue"
@@ -45,9 +45,9 @@ curl http://127.0.0.1:3456/health
 
   "models": {
     "checkedAt": "2026-04-11T23:01:16.296Z",
-    "available": ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
+    "available": ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"],
     "unavailable": [
-      { "id": "claude-opus-4", "code": "model_unavailable", "message": "..." }
+      { "id": "claude-opus-4-6", "code": "model_unavailable", "message": "..." }
     ]
   },
 
@@ -125,7 +125,7 @@ curl http://127.0.0.1:3456/v1/models
       "created": 1710000000
     },
     {
-      "id": "claude-opus-4-6",
+      "id": "claude-opus-4-7",
       "object": "model",
       "owned_by": "anthropic",
       "created": 1710000000

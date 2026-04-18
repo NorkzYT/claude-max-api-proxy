@@ -1,10 +1,9 @@
 FROM node:22-slim
 
 # Install git + gh CLI + Claude CLI.
-# gh is used by subprocesses spawned through this proxy (claude --print, etc.)
-# that need to commit + push as the user authenticated on the host. Config
-# and credential state are mounted in at runtime (/home/node/.config/gh and
-# /home/node/.gitconfig) so the container never ships credentials itself.
+# gh enables optional GitHub workflows inside containerized Claude Code tasks.
+# The proxy itself does not require mounted GitHub credentials; if you do mount
+# them, keep config and credential state external to the image.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends git ca-certificates curl gnupg \
  && mkdir -p /etc/apt/keyrings \

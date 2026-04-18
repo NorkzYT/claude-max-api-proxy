@@ -32,14 +32,17 @@ We consider the following **out of scope**:
 
 **Please do not file public GitHub issues for security vulnerabilities.**
 
-Instead, email the maintainer directly with:
+Preferred reporting path:
+
+- Use GitHub's private vulnerability reporting or the repository Security tab if private reporting is enabled.
+- If private reporting is not enabled, contact the repository owner privately through GitHub instead of opening a public issue.
+
+Include:
 
 - A clear description of the vulnerability.
 - Steps to reproduce, ideally including a minimal proof-of-concept.
 - Your assessment of impact and which threat-model assumptions it breaks.
 - Any suggested mitigation.
-
-Maintainer contact: see the `author` field in [`package.json`](./package.json) or the commit history.
 
 We aim to acknowledge reports within a few days and will coordinate a fix + disclosure timeline with you.
 

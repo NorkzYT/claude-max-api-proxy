@@ -1,120 +1,123 @@
 # macOS Auto-Start Setup
 
-This guide shows how to configure the Claude Code CLI Provider to start automatically when you log in.
+This guide shows how to run `claude-max-api-proxy` automatically at login with a LaunchAgent. The steps below avoid hardcoded home-directory paths by generating the plist from your current shell environment.
 
-## Create LaunchAgent
+## Prerequisites
 
-1. Create the plist file:
+From the repository root:
 
 ```bash
-cat > ~/Library/LaunchAgents/com.claude-code-provider.plist << 'PLIST'
+npm install
+npm run build
+claude auth login
+```
+
+## Create the LaunchAgent
+
+Run this from the repository root so `$(pwd)` resolves to the checked-out project path:
+
+```bash
+mkdir -p "$HOME/Library/LaunchAgents"
+
+cat > "$HOME/Library/LaunchAgents/com.claude-max-api-proxy.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
   <dict>
     <key>Label</key>
-    <string>com.claude-code-provider</string>
-    
-    <key>Comment</key>
-    <string>Claude Code CLI Provider (uses Claude Max subscription)</string>
-    
+    <string>com.claude-max-api-proxy</string>
+
     <key>RunAtLoad</key>
     <true/>
-    
+
     <key>KeepAlive</key>
     <true/>
-    
+
+    <key>WorkingDirectory</key>
+    <string>$(pwd)</string>
+
     <key>ProgramArguments</key>
     <array>
-      <string>/opt/homebrew/bin/node</string>
-      <string>/path/to/claude-code-cli-provider/dist/server/standalone.js</string>
+      <string>$(command -v node)</string>
+      <string>$(pwd)/dist/server/standalone.js</string>
     </array>
-    
+
     <key>StandardOutPath</key>
-    <string>/tmp/claude-provider.log</string>
-    
+    <string>/tmp/claude-max-api-proxy.log</string>
+
     <key>StandardErrorPath</key>
-    <string>/tmp/claude-provider.err.log</string>
-    
+    <string>/tmp/claude-max-api-proxy.err.log</string>
+
     <key>EnvironmentVariables</key>
     <dict>
       <key>HOME</key>
-      <string>/Users/YOUR_USERNAME</string>
+      <string>$HOME</string>
       <key>PATH</key>
-      <string>/Users/YOUR_USERNAME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+      <string>$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
   </dict>
 </plist>
 PLIST
 ```
 
-2. **Important:** Edit the file and replace:
-   - `/path/to/claude-code-cli-provider` with your actual path
-   - `/Users/YOUR_USERNAME` with your actual username
-   - Ensure the PATH includes the directory containing `claude` (check with `which claude`)
+If you later move the repository, regenerate the plist from the new path so `WorkingDirectory` and `ProgramArguments` stay correct.
 
-## Load the Service
+## Load the service
 
 ```bash
-# Load and start the service
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-code-provider.plist
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.claude-max-api-proxy.plist"
 
-# Verify it's running
-launchctl list | grep claude-code
-curl http://localhost:3456/health
+# Verify
+launchctl list | grep claude-max-api-proxy
+curl http://127.0.0.1:3456/health
 ```
 
-## Management Commands
+## Management commands
 
 ```bash
 # Check status
-launchctl list | grep claude-code
+launchctl list | grep claude-max-api-proxy
 
-# Restart the service
-launchctl kickstart -k gui/$(id -u)/com.claude-code-provider
+# Restart
+launchctl kickstart -k "gui/$(id -u)/com.claude-max-api-proxy"
 
-# Stop the service (temporary)
-launchctl bootout gui/$(id -u)/com.claude-code-provider
+# Stop temporarily
+launchctl bootout "gui/$(id -u)/com.claude-max-api-proxy"
 
-# Start the service again
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claude-code-provider.plist
+# Start again
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.claude-max-api-proxy.plist"
 
 # View logs
-tail -f /tmp/claude-provider.log
-tail -f /tmp/claude-provider.err.log
+tail -f /tmp/claude-max-api-proxy.log
+tail -f /tmp/claude-max-api-proxy.err.log
 ```
 
 ## Uninstall
 
 ```bash
-# Stop and remove the service
-launchctl bootout gui/$(id -u)/com.claude-code-provider
-rm ~/Library/LaunchAgents/com.claude-code-provider.plist
+launchctl bootout "gui/$(id -u)/com.claude-max-api-proxy"
+rm "$HOME/Library/LaunchAgents/com.claude-max-api-proxy.plist"
 ```
 
 ## Troubleshooting
 
-### Service starts but health check fails
+### Service starts but the health check fails
 
-Check the error log:
 ```bash
-cat /tmp/claude-provider.err.log
+cat /tmp/claude-max-api-proxy.err.log
 ```
 
 Common issues:
-- Wrong path to `standalone.js`
-- `claude` CLI not in PATH
-- Node.js not found
 
-### Finding the right paths
+- `npm run build` was never run, so `dist/server/standalone.js` does not exist yet.
+- `claude` is not on the LaunchAgent `PATH`.
+- `node` moved after the plist was created.
+
+### Check the resolved paths
 
 ```bash
-# Find node
-which node
-
-# Find claude
-which claude
-
-# Your home directory
-echo $HOME
+command -v node
+command -v claude
+pwd
+echo "$HOME"
 ```

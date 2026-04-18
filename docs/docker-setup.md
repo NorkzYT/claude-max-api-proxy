@@ -1,6 +1,8 @@
-# Docker Setup
+# Optional Docker Setup
 
-Run the proxy in a container. The image builds from source, installs the Claude CLI, and runs as a non-root user.
+Run the proxy in a container if you want a containerized deployment. Docker is fully optional; the standard source install lives in [README.md](../README.md).
+
+The image builds from source, installs the Claude CLI, and runs as a non-root user.
 
 ## Prerequisites
 
@@ -18,8 +20,8 @@ docker compose up -d
 The proxy starts on port 3456. Verify it works:
 
 ```bash
-curl http://localhost:3456/health
-curl http://localhost:3456/v1/models
+curl http://127.0.0.1:3456/health
+curl http://127.0.0.1:3456/v1/models
 ```
 
 ## Configuration
@@ -28,7 +30,7 @@ All settings go in `.env`. See `.env.example` for defaults.
 
 | Variable                  | Default          | Description                                                                                                            |
 | ------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `PORT`                    | `3456`           | Port the proxy listens on                                                                                              |
+| `PORT`                    | `3456`           | Host port published by Docker Compose. The Node process still listens on `3456` inside the container.                 |
 | `REPOS_DIR`               | `/opt/repos`     | Host directory with your repos, mounted into the container                                                             |
 | `CLAUDE_CONFIG_DIR`       | `~/.claude`      | Path to your Claude CLI config directory                                                                               |
 | `CLAUDE_CONFIG_FILE`      | `~/.claude.json` | Path to your Claude CLI config file                                                                                    |
@@ -90,6 +92,20 @@ networks:
 
 Then use `http://claude-max-proxy:3456/v1` as the base URL from your service.
 
+## Optional GitHub / git access inside the container
+
+The proxy itself does **not** require GitHub credentials inside the container. If you want Claude Code tasks running in the container to interact with GitHub repositories on your behalf, mount your existing git and GitHub CLI configuration:
+
+```yaml
+services:
+  claude-max-proxy:
+    volumes:
+      - ${HOME}/.gitconfig:/home/node/.gitconfig:ro
+      - ${HOME}/.config/gh:/home/node/.config/gh:ro
+```
+
+Leave those mounts out unless you explicitly need them.
+
 ## Extended Thinking
 
 The proxy enables Claude's extended thinking when any of these sources provide a budget, checked in this order:
@@ -125,7 +141,7 @@ That mounts `GET/POST/PUT /admin/thinking-budget`. Leave it disabled unless you 
 
 ```bash
 # OpenAI reasoning_effort
-curl http://localhost:3456/v1/chat/completions \
+curl http://127.0.0.1:3456/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-opus-4-6",
@@ -134,7 +150,7 @@ curl http://localhost:3456/v1/chat/completions \
   }'
 
 # Anthropic thinking
-curl http://localhost:3456/v1/chat/completions \
+curl http://127.0.0.1:3456/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "claude-opus-4-6",
@@ -143,7 +159,7 @@ curl http://localhost:3456/v1/chat/completions \
   }'
 
 # Header override
-curl http://localhost:3456/v1/chat/completions \
+curl http://127.0.0.1:3456/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "X-Thinking-Budget: high" \
   -d '{"model": "claude-opus-4-6", "messages": [...]}'

@@ -1,13 +1,15 @@
 # Contributing to `claude-max-api-proxy`
 
-Thanks for taking the time to contribute. This project is small, focused, and intentionally conservative — contributions that fit that posture are the easiest to review and merge.
+Thanks for taking the time to contribute. This is a small, focused open source project, and the easiest changes to review are the ones that stay aligned with that scope.
 
 ## Before you start
 
-1. **Open an issue first** for anything non-trivial. A 30-second "hey, I'm thinking of doing X, does that sound reasonable?" avoids hours of wasted work if the answer is "that doesn't fit the project's scope".
-2. **Typo / doc fixes** — just open the PR.
-3. **Bug fixes** — include a minimal reproduction in the PR description.
-4. **New features** — open an issue first.
+1. **Use the issue templates** for bugs and feature requests so reports include the minimum context needed to reproduce or evaluate the change.
+2. **Open an issue first** for anything non-trivial. A 30-second "hey, I'm thinking of doing X, does that sound reasonable?" avoids hours of wasted work if the answer is "that doesn't fit the project's scope".
+3. **Read the code of conduct** before participating in issues or PR discussions: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
+4. **Typo / doc fixes** — just open the PR.
+5. **Bug fixes** — include a minimal reproduction in the PR description.
+6. **New features** — open an issue first.
 
 ## Development setup
 
@@ -15,8 +17,7 @@ Thanks for taking the time to contribute. This project is small, focused, and in
 git clone https://github.com/mattschwen/claude-max-api-proxy.git
 cd claude-max-api-proxy
 npm install
-npm run build     # tsc → dist/
-npm test          # runs compiled tests under dist/
+npm run ci        # build + test
 ```
 
 You'll also need:
@@ -29,6 +30,9 @@ You'll also need:
 ## Running locally
 
 ```bash
+# Build once in a fresh clone
+npm run build
+
 # Foreground
 npm start
 
@@ -48,11 +52,11 @@ The server binds to `http://127.0.0.1:3456`.
    git checkout -b fix/descriptive-name
    ```
 2. Make your changes in `src/`. `dist/` is a build artifact — don't hand-edit it.
-3. Build: `npm run build`
-4. Run tests: `npm test`
-5. Exercise the change manually with `curl` against a running server (see examples in [`docs/API.md`](./docs/API.md)).
+3. Run the local check suite: `npm run ci`
+4. Exercise the change manually with `curl` against a running server when behavior changes (see examples in [`docs/API.md`](./docs/API.md)).
+5. If you change setup, configuration, or deployment behavior, update the affected docs in the same PR (`README.md`, `docs/*`, `.env.example`, and any GitHub templates/workflows).
 6. Commit with a descriptive message (see [commit messages](#commit-messages)).
-7. Push and open a PR.
+7. Push and open a PR. GitHub Actions runs the same build-and-test checks on pushes and pull requests.
 
 ## Code style
 
@@ -84,7 +88,7 @@ Body should explain **why** the change is needed (root cause, symptoms, what the
 Tests run from the compiled `dist/` output:
 
 ```bash
-npm test
+npm run ci
 ```
 
 If you're adding a new feature, add a test alongside it (`foo.test.ts` next to `foo.ts`). The test runner picks up `dist/**/*.test.js` automatically after `npm run build`.
@@ -118,6 +122,10 @@ Please include:
 ## Security issues
 
 **Do not file public issues for security vulnerabilities.** See [SECURITY.md](./SECURITY.md) for the private reporting process.
+
+## Community standards
+
+Participation in this project is governed by [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md).
 
 ## License
 

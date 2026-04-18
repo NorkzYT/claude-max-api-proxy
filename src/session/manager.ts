@@ -1,8 +1,8 @@
 /**
  * Session Manager
  *
- * Maps Clawdbot conversation IDs to Claude CLI session IDs
- * for maintaining conversation context across requests.
+ * Maps conversation IDs to Claude CLI session IDs for maintaining context
+ * across requests.
  *
  * Phase 3b: Session resume failure tracking — auto-invalidate after consecutive failures
  * Phase 5d: Track session context size for token counting
@@ -82,7 +82,7 @@ class SessionManager {
   }
 
   /**
-   * Get or create a Claude session ID for a Clawdbot conversation.
+   * Get or create a Claude session ID for a conversation.
    * Returns { sessionId, isResume } so callers know whether to use --resume.
    */
   getOrCreate(

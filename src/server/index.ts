@@ -1,7 +1,7 @@
 /**
- * Express HTTP Server
+ * Express HTTP server
  *
- * Provides OpenAI-compatible API endpoints that wrap Claude Code CLI
+ * Provides the standalone OpenAI-compatible API surface.
  */
 import express from "express";
 import { createServer, type Server } from "http";
@@ -118,7 +118,7 @@ export async function startServer(config: ServerConfig): Promise<Server> {
 
     serverInstance.listen(port, host, () => {
       console.log(
-        `[Server] Claude Code CLI provider running at http://${host}:${port}`,
+        `[Server] Claude Max API Proxy running at http://${host}:${port}`,
       );
       console.log(
         `[Server] OpenAI-compatible endpoint: http://${host}:${port}/v1/chat/completions`,

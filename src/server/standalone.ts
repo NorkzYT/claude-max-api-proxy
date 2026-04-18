@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * Standalone server for testing without Clawdbot
+ * Standalone CLI entrypoint for claude-max-api-proxy.
  *
- * Phase 4c: Graceful shutdown — stop accepting → wait for in-flight →
- *           kill all subprocesses → save sessions → exit
+ * Starts the local OpenAI-compatible proxy without any host application.
  *
  * Usage:
  *   npm run start
@@ -22,8 +21,8 @@ const DEFAULT_PORT = 3456;
 const SHUTDOWN_GRACE_MS = 30000;
 
 async function main(): Promise<void> {
-  console.log("Claude Code CLI Provider - Standalone Server");
-  console.log("============================================\n");
+  console.log("Claude Max API Proxy");
+  console.log("====================\n");
 
   const port = parseInt(process.argv[2] || String(DEFAULT_PORT), 10);
   if (isNaN(port) || port < 1 || port > 65535) {
@@ -74,11 +73,11 @@ async function main(): Promise<void> {
     log("server.start", { port });
     console.log("\nServer ready. Test with:");
     console.log(
-      `  curl -X POST http://localhost:${port}/v1/chat/completions \\`,
+      `  curl -X POST http://127.0.0.1:${port}/v1/chat/completions \\`,
     );
     console.log(`    -H "Content-Type: application/json" \\`);
     console.log(
-      `    -d '{"model": "claude-sonnet-4", "messages": [{"role": "user", "content": "Hello!"}]}'`,
+      `    -d '{"model": "claude-sonnet-4-6", "messages": [{"role": "user", "content": "Hello!"}]}'`,
     );
     console.log("\nPress Ctrl+C to stop.\n");
   } catch (err) {

@@ -1,13 +1,13 @@
 /**
  * API Route Handlers
  *
- * Implements OpenAI-compatible endpoints for integration with OpenClaw/Clawdbot.
+ * Implements OpenAI-compatible endpoints for local AI tools and SDKs.
  *
  * CONCURRENCY MODEL: Queue-and-Serialize per conversation.
  * - Each conversation gets a FIFO queue
- * - Requests for the same conversation are processed sequentially
+ * - Requests for the same conversation are processed according to the configured policy
  * - Different conversations run fully in parallel
- * - No request is ever silently killed — every request gets a response
+ * - Requests end in completion, timeout, or explicit cancellation
  *
  * Reliability improvements:
  * - Phase 1a: Activity-based stall detection (resets on each content_delta)
@@ -54,7 +54,7 @@ export { isAuthError, withAuthRetry } from "./auth-retry.js";
 
 // Label → token-budget mapping. Labels match Claude CLI's --effort levels
 // (low, medium, high, xhigh, max). "off" disables extended thinking (no --effort flag).
-// xhigh was added with Claude Opus 4.7 as an intermediate tier between high and max.
+// xhigh is an intermediate tier between high and max on supported Claude CLIs.
 const REASONING_EFFORT_MAP: Record<string, number> = {
   off: 0,
   low: 5000,
@@ -1565,7 +1565,7 @@ export async function handleHealth(
     unhealthyReason: authUnhealthy
       ? `verifyAuth failed ${consecutiveAuthFailures} consecutive times`
       : undefined,
-    provider: "claude-code-cli",
+    provider: "claude-max-api-proxy",
     timestamp: new Date().toISOString(),
     consecutiveAuthFailures,
     sessions: {

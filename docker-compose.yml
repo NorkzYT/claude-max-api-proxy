@@ -13,6 +13,9 @@ services:
       - ${CLAUDE_CONFIG_DIR:-${HOME}/.claude}:/home/node/.claude:ro
       - ${CLAUDE_CONFIG_FILE:-${HOME}/.claude.json}:/home/node/.claude.json:ro
       - ${REPOS_DIR:-/opt/repos}:/opt/repos
+      # Optional: forward git / GitHub CLI config for repo workflows inside the container.
+      # - ${HOME}/.gitconfig:/home/node/.gitconfig:ro
+      # - ${HOME}/.config/gh:/home/node/.config/gh:ro
       - claude-max-proxy-data:/data
     ports:
       - "${PORT:-3456}:3456"
