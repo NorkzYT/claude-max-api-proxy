@@ -11,6 +11,7 @@ export interface OpenAIChatMessage {
 export interface OpenAIChatRequest {
   model: string;
   messages: OpenAIChatMessage[];
+  agent?: string;
   stream?: boolean;
   temperature?: number;
   max_tokens?: number;

@@ -7,6 +7,8 @@ import express from "express";
 import { createServer, type Server } from "http";
 import type { Socket } from "net";
 import {
+  handleAgentDetails,
+  handleAgents,
   handleChatCompletions,
   handleCapabilities,
   handleModels,
@@ -59,8 +61,12 @@ function createApp(): express.Application {
   app.get("/health", handleHealth);
   app.get("/v1/models", handleModels);
   app.get("/v1/capabilities", handleCapabilities);
+  app.get("/v1/agents", handleAgents);
+  app.get("/v1/agents/:agentId", handleAgentDetails);
   app.post("/v1/chat/completions", handleChatCompletions);
   app.post("/v1/responses", handleResponses);
+  app.post("/v1/agents/:agentId/chat/completions", handleChatCompletions);
+  app.post("/v1/agents/:agentId/responses", handleResponses);
   if (runtimeConfig.enableAdminApi) {
     app.get("/admin/thinking-budget", handleGetThinkingBudget);
     app.post("/admin/thinking-budget", handleSetThinkingBudget);

@@ -18,6 +18,7 @@ export type ResponsesInputItem =
 
 export interface OpenAIResponsesRequest {
   model?: string;
+  agent?: string;
   input: ResponsesInputItem | ResponsesInputItem[];
   stream?: boolean;
   user?: string;

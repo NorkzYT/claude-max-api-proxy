@@ -55,7 +55,12 @@ import {
   chatToResponsesResponse,
   responsesToChatRequest,
 } from "../adapter/responses.js";
-import type { OpenAIChatResponse } from "../types/openai.js";
+import {
+  applyAgentProfile,
+  getBuiltinAgent,
+  listBuiltinAgents,
+} from "../agents.js";
+import type { OpenAIChatRequest, OpenAIChatResponse } from "../types/openai.js";
 import type { OpenAIResponsesRequest } from "../types/responses.js";
 import {
   REASONING_EFFORT_MAP,
@@ -471,14 +476,13 @@ export async function handleChatCompletions(
   res: Response,
 ): Promise<void> {
   const requestId = uuidv4().replace(/-/g, "").slice(0, 24);
-  const body = req.body as Record<string, unknown>;
-  const stream = body.stream === true;
-  const requestedModel = body.model ? String(body.model) : undefined;
-
+  const requestedAgentId =
+    typeof req.params?.agentId === "string" ? req.params.agentId : undefined;
+  const rawBody = (req.body ?? {}) as OpenAIChatRequest & Record<string, unknown>;
   if (
-    !body.messages ||
-    !Array.isArray(body.messages) ||
-    body.messages.length === 0
+    !rawBody.messages ||
+    !Array.isArray(rawBody.messages) ||
+    rawBody.messages.length === 0
   ) {
     res.status(400).json({
       error: {
@@ -489,6 +493,37 @@ export async function handleChatCompletions(
     });
     return;
   }
+
+  const bodyAgentId =
+    typeof rawBody.agent === "string" && rawBody.agent.trim()
+      ? rawBody.agent.trim()
+      : undefined;
+  const unknownAgentId =
+    (requestedAgentId && !getBuiltinAgent(requestedAgentId)
+      ? requestedAgentId
+      : undefined) ||
+    (bodyAgentId && !getBuiltinAgent(bodyAgentId) ? bodyAgentId : undefined) ||
+    (runtimeConfig.defaultAgent && !getBuiltinAgent(runtimeConfig.defaultAgent)
+      ? runtimeConfig.defaultAgent
+      : undefined);
+  if (unknownAgentId) {
+    res.status(400).json({
+      error: {
+        message: `Unknown agent '${unknownAgentId}'. Use GET /v1/agents to see the built-in agent catalog.`,
+        type: "invalid_request_error",
+        code: "agent_not_found",
+      },
+    });
+    return;
+  }
+
+  const { request: effectiveRequest, agent } = applyAgentProfile(rawBody, {
+    explicitAgentId: requestedAgentId,
+    defaultAgentId: runtimeConfig.defaultAgent,
+  });
+  const body = effectiveRequest as OpenAIChatRequest & Record<string, unknown>;
+  const stream = body.stream === true;
+  const requestedModel = body.model ? String(body.model) : undefined;
 
   if (requestedModel && !isValidModel(requestedModel)) {
     res.status(400).json({
@@ -583,6 +618,7 @@ export async function handleChatCompletions(
     conversationId,
     model: tempModel,
     stream,
+    agent: agent?.id,
     queueDepth,
     reasoningMode: reasoning.mode,
     reasoningSource: reasoning.source,
@@ -1513,6 +1549,7 @@ export async function handleModels(
 function buildCapabilitiesPayload(
   availability: Awaited<ReturnType<typeof modelAvailability.getSnapshot>> | null,
 ): Record<string, unknown> {
+  const agents = listBuiltinAgents();
   const availableModels = availability?.available.map((model) => model.id) || [];
   const adaptiveModels = availableModels.filter((model) =>
     supportsAdaptiveReasoningModel(model),
@@ -1539,6 +1576,16 @@ function buildCapabilitiesPayload(
       tools: false,
       structuredOutputs: false,
       mcpServer: false,
+    },
+    agents: {
+      default: runtimeConfig.defaultAgent ?? null,
+      available: agents,
+      routes: {
+        list: "/v1/agents",
+        details: "/v1/agents/:agentId",
+        chatCompletions: "/v1/agents/:agentId/chat/completions",
+        responses: "/v1/agents/:agentId/responses",
+      },
     },
     reasoning: {
       supportedInputs: [
@@ -1572,6 +1619,30 @@ export async function handleCapabilities(
     /* surface whatever static capability data we still have */
   }
   res.json(buildCapabilitiesPayload(availability));
+}
+
+export function handleAgents(_req: Request, res: Response): void {
+  res.json({
+    object: "list",
+    data: listBuiltinAgents(),
+    default: runtimeConfig.defaultAgent ?? null,
+  });
+}
+
+export function handleAgentDetails(req: Request, res: Response): void {
+  const agentId = typeof req.params?.agentId === "string" ? req.params.agentId : "";
+  const agent = getBuiltinAgent(agentId);
+  if (!agent) {
+    res.status(404).json({
+      error: {
+        message: `Unknown agent '${agentId}'`,
+        type: "invalid_request_error",
+        code: "agent_not_found",
+      },
+    });
+    return;
+  }
+  res.json(agent);
 }
 
 export async function handleResponses(
@@ -1742,6 +1813,7 @@ export async function handleHealth(
       sameConversationPolicy: runtimeConfig.sameConversationPolicy,
       debugQueues: runtimeConfig.debugQueues,
       enableAdminApi: runtimeConfig.enableAdminApi,
+      defaultAgent: runtimeConfig.defaultAgent ?? null,
     },
     auth: availability?.auth ?? undefined,
     models: availability

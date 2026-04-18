@@ -1,10 +1,11 @@
 # API Reference
 
-`claude-max-api-proxy` exposes five HTTP endpoints on `http://127.0.0.1:3456` (by default). The OpenAI-compatible endpoints live under `/v1`. The `/health` endpoint is a non-OpenAI operational endpoint.
+`claude-max-api-proxy` exposes several HTTP endpoints on `http://127.0.0.1:3456` (by default). The OpenAI-compatible endpoints live under `/v1`. The `/health` endpoint is a non-OpenAI operational endpoint.
 
 - [`GET /health`](#get-health)
 - [`GET /v1/models`](#get-v1models)
 - [`GET /v1/capabilities`](#get-v1capabilities)
+- [`GET /v1/agents`](#get-v1agents)
 - [`POST /v1/chat/completions`](#post-v1chatcompletions)
 - [`POST /v1/responses`](#post-v1responses)
 
@@ -177,6 +178,18 @@ curl http://127.0.0.1:3456/v1/capabilities
     "structuredOutputs": false,
     "mcpServer": false
   },
+  "agents": {
+    "default": null,
+    "available": [
+      {
+        "id": "expert-coder",
+        "name": "Claw Proxy Expert Coder",
+        "description": "Canonical repo-native coding agent tuned for Claw Proxy architecture, integration work, debugging, and implementation.",
+        "tags": ["coding", "architecture", "integration", "debugging", "open-source"],
+        "defaultReasoningEffort": "high"
+      }
+    ]
+  },
   "reasoning": {
     "allowedLabels": ["off", "low", "medium", "high", "xhigh", "max"],
     "defaultBudget": null,
@@ -201,6 +214,49 @@ Use this endpoint to decide whether to call `/v1/chat/completions` or `/v1/respo
 
 ---
 
+## `GET /v1/agents`
+
+Lists the built-in agent catalog shipped by the proxy.
+
+### Example
+
+```bash
+curl http://127.0.0.1:3456/v1/agents
+curl http://127.0.0.1:3456/v1/agents/expert-coder
+```
+
+### Response
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "expert-coder",
+      "name": "Claw Proxy Expert Coder",
+      "description": "Canonical repo-native coding agent tuned for Claw Proxy architecture, integration work, debugging, and implementation.",
+      "tags": ["coding", "architecture", "integration", "debugging", "open-source"],
+      "defaultReasoningEffort": "high"
+    }
+  ],
+  "default": null
+}
+```
+
+### Scoped agent routes
+
+Use these routes when you want to force every request through the built-in
+agent profile instead of relying on caller-supplied prompts:
+
+- `POST /v1/agents/expert-coder/chat/completions`
+- `POST /v1/agents/expert-coder/responses`
+
+You can also send `"agent": "expert-coder"` in the request body, or set
+`CLAUDE_PROXY_DEFAULT_AGENT=expert-coder` to make the agent profile apply to
+every request automatically.
+
+---
+
 ## `POST /v1/chat/completions`
 
 OpenAI-compatible chat completion endpoint. Supports streaming (`stream: true`) and non-streaming.
@@ -210,6 +266,7 @@ The proxy accepts:
 - stable family aliases: `sonnet`, `opus`, `haiku`
 - exact versioned IDs returned by `GET /v1/models`
 - older/future versioned IDs for those families, which are mapped to the currently available family model on this machine
+- optional built-in agent selection via request body `"agent": "expert-coder"` or the scoped `/v1/agents/:agentId/chat/completions` route
 
 ### Minimal non-streaming request
 
@@ -416,4 +473,5 @@ continue the same Claude CLI session without manually supplying `user`.
 
 - `stream: true` is not supported yet on `/v1/responses`; use `/v1/chat/completions` for streaming.
 - `input` accepts plain strings, text items, or message-shaped items with `role` and `content`.
+- `agent` accepts a built-in agent id such as `expert-coder`, or you can use the scoped `/v1/agents/:agentId/responses` route.
 - Reasoning controls (`thinking`, `reasoning`, `reasoning_effort`, `output_config.effort`) are passed through the same normalization logic used by `/v1/chat/completions`.

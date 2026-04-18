@@ -79,6 +79,7 @@ export function responsesToChatRequest(
 
   return {
     model: request.model || "sonnet",
+    agent: request.agent,
     messages,
     stream: false,
     user: conversationId || request.user,
