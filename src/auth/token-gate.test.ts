@@ -15,26 +15,6 @@ function makeTempCredsPath(suffix: string): string {
   return path.join(dir, ".credentials.json");
 }
 
-/**
- * Build a stub acquire fn that serializes callers via a promise-chain in
- * memory. Tests use this to exercise the gate logic without touching the
- * real filesystem lock (proper-lockfile requires the target file to exist
- * and writes a real lock directory — fine in prod, noisy in unit tests).
- */
-function makeStubAcquire(): (
-  lockTarget: string,
-) => Promise<() => Promise<void>> {
-  let chain: Promise<void> = Promise.resolve();
-  return (_lockTarget: string): Promise<() => Promise<void>> => {
-    const prev = chain;
-    let release!: () => void;
-    chain = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    return prev.then(() => async () => release());
-  };
-}
-
 test("TokenGate: fast-paths (runs concurrently) outside refresh window", async () => {
   const credsPath = makeTempCredsPath("outside");
   // expiresAt 1h in the future; window is [-30min, +5min], so we are WAY
@@ -45,7 +25,6 @@ test("TokenGate: fast-paths (runs concurrently) outside refresh window", async (
   const gate = new TokenGate({
     credentialsPath: credsPath,
     now: () => now,
-    acquire: makeStubAcquire(),
   });
   assert.equal(gate.isInRefreshWindow(), false);
 
@@ -65,7 +44,6 @@ test("TokenGate: fast-paths (runs concurrently) outside refresh window", async (
   ]);
 
   assert.deepEqual(results.sort(), [1, 2, 3]);
-  // All three should have started before any finished (parallel, not serial).
   assert.equal(started.length, 3);
 });
 
@@ -79,7 +57,6 @@ test("TokenGate: serializes concurrent calls inside refresh window", async () =>
   const gate = new TokenGate({
     credentialsPath: credsPath,
     now: () => now,
-    acquire: makeStubAcquire(),
   });
   assert.equal(gate.isInRefreshWindow(), true);
 
@@ -119,10 +96,7 @@ test("TokenGate: fast-paths when credentials file is missing", async () => {
   } catch {
     /* noop */
   }
-  const gate = new TokenGate({
-    credentialsPath: credsPath,
-    acquire: makeStubAcquire(),
-  });
+  const gate = new TokenGate({ credentialsPath: credsPath });
   assert.equal(gate.isInRefreshWindow(), false);
 
   const v = await gate.runGated(async () => 42);
@@ -132,10 +106,7 @@ test("TokenGate: fast-paths when credentials file is missing", async () => {
 test("TokenGate: fast-paths on malformed credentials file", async () => {
   const credsPath = makeTempCredsPath("malformed");
   fs.writeFileSync(credsPath, "not json at all");
-  const gate = new TokenGate({
-    credentialsPath: credsPath,
-    acquire: makeStubAcquire(),
-  });
+  const gate = new TokenGate({ credentialsPath: credsPath });
   assert.equal(gate.isInRefreshWindow(), false);
 
   const v = await gate.runGated(async () => "ok");
@@ -150,7 +121,6 @@ test("TokenGate: releases the mutex even when fn throws", async () => {
   const gate = new TokenGate({
     credentialsPath: credsPath,
     now: () => now,
-    acquire: makeStubAcquire(),
   });
 
   await assert.rejects(
@@ -163,26 +133,4 @@ test("TokenGate: releases the mutex even when fn throws", async () => {
   // Next call should proceed (mutex was released).
   const v = await gate.runGated(async () => "after");
   assert.equal(v, "after");
-});
-
-test("TokenGate: fails open when lock acquire itself throws", async () => {
-  const credsPath = makeTempCredsPath("acquirefail");
-  const now = 1_000_000_000_000;
-  writeCreds(credsPath, now + 60 * 1000); // inside window
-
-  let calls = 0;
-  const gate = new TokenGate({
-    credentialsPath: credsPath,
-    now: () => now,
-    acquire: async () => {
-      calls++;
-      throw new Error("lock-fs-read-only");
-    },
-  });
-
-  // Even though the lock can't be taken, fn runs so the proxy is not
-  // deadlocked by a read-only mount or a broken lockfile.
-  const v = await gate.runGated(async () => "fallthrough");
-  assert.equal(v, "fallthrough");
-  assert.equal(calls, 1);
 });

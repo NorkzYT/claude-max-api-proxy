@@ -15,36 +15,24 @@
  *
  * Design
  * ------
- * - Exposes `runGated(fn)` that runs `fn()` through a cross-process mutex
+ * - Exposes `runGated(fn)` that runs `fn()` through a promise-chain mutex
  *   ONLY when `now` falls inside `[expiresAt - 30min, expiresAt + 5min]`.
  * - Outside that window we take the fast path (no serialization overhead).
- * - The mutex is a `proper-lockfile` directory lock on a sibling file in the
- *   credentials directory, so ANY process on the host sharing the mount —
- *   a host user's `claude` session and the containerized proxy's subprocess
- *   pool alike — serializes against the same inode. This closes the gap
- *   where the previous in-process mutex couldn't see a concurrent refresh
- *   performed by a sibling `claude` CLI running on the host.
+ * - This container's ~/.claude is a private named volume (see
+ *   docker-compose.openclaw.yml); nothing else shares the credentials
+ *   file, so an in-process mutex is sufficient — no filesystem lock is
+ *   required to coordinate with a sibling `claude` CLI on the host.
  * - Credentials file is re-read on every call so refreshes performed by the
  *   CLI are visible immediately.
  * - Missing / malformed credentials file → fast path (fail-open to avoid
  *   deadlocking the proxy if the file is briefly absent).
- * - The host-side user can opt in via the `claude-gated` wrapper
- *   (openclaw-home/bin/claude-gated), which flocks the same file before
- *   exec'ing `claude`. Without it, the lock still serializes all
- *   in-container spawns (the bulk of refresh pressure) and reduces but
- *   does not eliminate the host/container race.
  */
 import fs from "node:fs";
 import path from "node:path";
-import lockfile from "proper-lockfile";
 import { log, logError } from "../logger.js";
 
 const REFRESH_LEAD_MS = 30 * 60 * 1000; // 30 minutes before expiry
 const REFRESH_TAIL_MS = 5 * 60 * 1000; // 5 minutes after expiry (grace)
-const LOCK_STALE_MS = 60 * 1000; // treat a held lock as stale after 60s
-const LOCK_RETRIES = 10;
-const LOCK_MIN_TIMEOUT_MS = 100;
-const LOCK_MAX_TIMEOUT_MS = 3000;
 
 interface ClaudeCredentials {
   claudeAiOauth?: {
@@ -57,43 +45,14 @@ export interface TokenGateOptions {
   leadMs?: number;
   tailMs?: number;
   now?: () => number;
-  /**
-   * Override the acquire function (tests). Given the path to the lock target,
-   * resolves to a release function. Default uses `proper-lockfile.lock`.
-   */
-  acquire?: (lockTarget: string) => Promise<() => Promise<void>>;
-}
-
-/**
- * Default acquire: `proper-lockfile.lock` on the credentials file itself.
- * `proper-lockfile` lays down a `<path>.lock` sibling directory, which is
- * atomic across processes sharing the same mount.
- */
-async function defaultAcquire(
-  lockTarget: string,
-): Promise<() => Promise<void>> {
-  const release = await lockfile.lock(lockTarget, {
-    stale: LOCK_STALE_MS,
-    retries: {
-      retries: LOCK_RETRIES,
-      factor: 1.5,
-      minTimeout: LOCK_MIN_TIMEOUT_MS,
-      maxTimeout: LOCK_MAX_TIMEOUT_MS,
-      randomize: true,
-    },
-    realpath: false,
-  });
-  return release;
 }
 
 export class TokenGate {
+  private mutex: Promise<void> = Promise.resolve();
   private readonly credentialsPath: string;
   private readonly leadMs: number;
   private readonly tailMs: number;
   private readonly now: () => number;
-  private readonly acquire: (
-    lockTarget: string,
-  ) => Promise<() => Promise<void>>;
   private watcher: fs.FSWatcher | null = null;
   private lastExpiresAt: number | null = null;
 
@@ -104,7 +63,6 @@ export class TokenGate {
     this.leadMs = options.leadMs ?? REFRESH_LEAD_MS;
     this.tailMs = options.tailMs ?? REFRESH_TAIL_MS;
     this.now = options.now ?? Date.now;
-    this.acquire = options.acquire ?? defaultAcquire;
   }
 
   /**
@@ -137,16 +95,12 @@ export class TokenGate {
   /**
    * Run `fn` with token-refresh serialization applied only when necessary.
    *
-   * Inside the refresh window: acquire a cross-process filesystem lock
-   * (via `proper-lockfile`) held for the ENTIRE lifetime of `fn` (including
-   * any streaming subprocess), so only one `claude` subprocess can drive a
-   * refresh at a time — across the host boundary.
+   * Inside the refresh window: queue behind the previous gated call via a
+   * promise-chained mutex so only one `claude` subprocess in this process
+   * drives a refresh at a time. The mutex is held for the ENTIRE lifetime
+   * of `fn` (including any streaming subprocess).
    *
    * Outside the window: fast-path — invoke `fn` directly.
-   *
-   * Lock failures fail-open: if the lock cannot be acquired (e.g., the lock
-   * file is in a read-only mount), log and fall through to fn so we never
-   * deadlock the proxy.
    */
   async runGated<T>(fn: () => Promise<T>): Promise<T> {
     const expiresAt = this.readExpiresAt();
@@ -161,28 +115,20 @@ export class TokenGate {
     }
 
     const msUntilExpiry = expiresAt !== null ? expiresAt - now : null;
+    const prev = this.mutex;
+    let release!: () => void;
+    this.mutex = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
     const enterStart = Date.now();
-    let release: (() => Promise<void>) | null = null;
-    let contended = false;
-
-    try {
-      release = await this.acquire(this.credentialsPath);
-    } catch (err) {
-      logError("auth.gate_contended", err, {
-        msUntilExpiry,
-        reason: "acquire_failed",
-      });
-      // Fail-open: run without the lock rather than deadlocking.
-      return fn();
-    }
-
+    await prev;
     const acquireDurationMs = Date.now() - enterStart;
-    contended = acquireDurationMs > LOCK_MIN_TIMEOUT_MS;
 
     log("auth.gate_entered", {
       msUntilExpiry,
       acquireDurationMs,
-      contended,
+      contended: acquireDurationMs > 1,
     });
 
     const fnStart = Date.now();
@@ -190,14 +136,7 @@ export class TokenGate {
       return await fn();
     } finally {
       const fnDurationMs = Date.now() - fnStart;
-      try {
-        await release();
-      } catch (err) {
-        logError("auth.gate_released", err, {
-          fnDurationMs,
-          reason: "release_failed",
-        });
-      }
+      release();
       log("auth.gate_released", { fnDurationMs });
     }
   }
