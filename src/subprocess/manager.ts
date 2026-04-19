@@ -181,17 +181,28 @@ export class ClaudeSubprocess extends EventEmitter {
 
               subprocessRegistry.register(this);
 
+              let firstDataAt: number | null = null;
+              const spawnedAt = Date.now();
               this.process.stdout?.on("data", (chunk: Buffer) => {
+                if (firstDataAt === null) {
+                  firstDataAt = Date.now();
+                  log("subprocess.first_stdout", {
+                    pid: this.process?.pid,
+                    msAfterSpawn: firstDataAt - spawnedAt,
+                    bytes: chunk.length,
+                  });
+                }
                 this.buffer += chunk.toString();
                 this.processBuffer();
               });
 
               this.process.stderr?.on("data", (chunk: Buffer) => {
                 const errorText = chunk.toString().trim();
-                if (errorText && process.env.DEBUG) {
+                if (errorText) {
                   console.error(
-                    "[Subprocess stderr]:",
-                    errorText.slice(0, 200),
+                    "[Subprocess stderr pid=%s]: %s",
+                    this.process?.pid,
+                    errorText.slice(0, 500),
                   );
                 }
               });

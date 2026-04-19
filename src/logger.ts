@@ -13,6 +13,7 @@ export type LogEvent =
   | "request.timeout"
   | "request.error"
   | "subprocess.spawn"
+  | "subprocess.first_stdout"
   | "subprocess.stall"
   | "subprocess.kill"
   | "subprocess.close"

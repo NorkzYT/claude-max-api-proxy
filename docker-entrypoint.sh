@@ -23,6 +23,22 @@ set -eu
 : "${PGID:=1000}"
 
 if [ "$(id -u)" = "0" ]; then
+  # gosu 1.14 looks up the target user in /etc/passwd and sets HOME from
+  # that entry, overriding whatever HOME was in the env. The image's
+  # existing `node` user is uid 1000; when PUID != 1000 (e.g. 1002 to
+  # match host file perms) there's no passwd entry for that uid and gosu
+  # falls back to HOME=/, which sends the Claude CLI looking for
+  # /.credentials.json and sitting on a 30s internal timeout that
+  # produces the "Claude CLI exited with code 0 without response"
+  # symptom. Ensure a passwd entry exists for the runtime uid so gosu
+  # derives the correct home.
+  if ! getent passwd "$PUID" >/dev/null 2>&1; then
+    echo "node:x:${PUID}:${PGID}::/home/node:/bin/sh" >> /etc/passwd
+  fi
+  if ! getent group "$PGID" >/dev/null 2>&1; then
+    echo "node:x:${PGID}:" >> /etc/group
+  fi
+
   # Named-volume mount points are root-owned until we touch them.
   # Also re-chown every run: an earlier `docker exec --user root`
   # (e.g. `claude setup-token`) can leave files here owned by root,
@@ -40,9 +56,9 @@ if [ "$(id -u)" = "0" ]; then
   fi
   chown "$PUID:$PGID" /home/node/.claude.json 2>/dev/null || true
 
-  # Preserve env (HOME / PATH etc.) across the privilege drop. gosu does not
-  # reset these the way `su` does, which is exactly what we want: the Node
-  # server was written assuming HOME=/home/node.
+  # gosu derives HOME from the /etc/passwd entry we just ensured above.
+  # All other env vars (CLAUDE_CODE_OAUTH_TOKEN, PATH, etc.) pass through
+  # untouched.
   exec gosu "$PUID:$PGID" "$@"
 fi
 

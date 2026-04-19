@@ -136,8 +136,12 @@ export async function startServer(config: ServerConfig): Promise<Server> {
         // Pool warm was previously a module-import side-effect, which
         // raced startup verifyAuth for CPU and could SIGTERM the auth
         // check on a cold container. Kicking it off after listen()
-        // keeps the startup path sequential.
-        startSubprocessPool();
+        // keeps the startup path sequential. Opt-out via env when the
+        // warm probes interfere with real request spawns (seen on some
+        // hosts where pool spawns stall chat requests' stdout for 30s).
+        if (process.env.CLAUDE_PROXY_DISABLE_POOL !== "1") {
+          startSubprocessPool();
+        }
       }
       resolve(serverInstance!);
     });
