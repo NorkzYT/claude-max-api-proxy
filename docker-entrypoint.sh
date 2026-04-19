@@ -24,7 +24,21 @@ set -eu
 
 if [ "$(id -u)" = "0" ]; then
   # Named-volume mount points are root-owned until we touch them.
+  # Also re-chown every run: an earlier `docker exec --user root`
+  # (e.g. `claude setup-token`) can leave files here owned by root,
+  # which then locks out uid $PUID on restart.
   chown "$PUID:$PGID" /home/node /home/node/.claude /data 2>/dev/null || true
+
+  # Seed an empty legacy settings file so the Claude CLI stops printing
+  # "Claude configuration file not found at: /home/node/.claude.json"
+  # three times per invocation. The CLI doesn't need the file's content,
+  # only its presence. Re-chown it unconditionally — the Claude CLI may
+  # have rewritten it earlier while running as a different uid.
+  if [ ! -e /home/node/.claude.json ]; then
+    echo '{}' > /home/node/.claude.json
+    chmod 600 /home/node/.claude.json
+  fi
+  chown "$PUID:$PGID" /home/node/.claude.json 2>/dev/null || true
 
   # Preserve env (HOME / PATH etc.) across the privilege drop. gosu does not
   # reset these the way `su` does, which is exactly what we want: the Node

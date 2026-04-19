@@ -190,7 +190,22 @@ export class ModelAvailabilityManager {
   }
 
   private async refresh(): Promise<ModelAvailabilitySnapshot> {
-    const authResult = await this.deps.verifyAuth();
+    // When CLAUDE_CODE_OAUTH_TOKEN is set, auth is env-provided and no
+    // credential file is involved. Skip the verifyAuth subprocess entirely —
+    // it's slow and can SIGTERM on cold-start event-loop contention, which
+    // then falsely marks the proxy unauthenticated. Model probes will surface
+    // real auth problems (an invalid token 401s on the first probe).
+    const skipVerify = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    const authResult = skipVerify
+      ? {
+          ok: true as const,
+          status: {
+            loggedIn: true,
+            authMethod: "oauth_token",
+            apiProvider: "firstParty",
+          },
+        }
+      : await this.deps.verifyAuth();
     const definitions = this.deps.getModelDefinitions();
 
     if (!authResult.ok) {

@@ -20,7 +20,7 @@ import {
 } from "../auth/proactive-refresh.js";
 import { scheduleSelfRestart } from "../auth/uptime-watchdog.js";
 import { tokenGate } from "../auth/token-gate.js";
-import "../subprocess/pool.js";
+import { startSubprocessPool, stopSubprocessPool } from "../subprocess/pool.js";
 import "../store/conversation.js";
 
 export interface ServerConfig {
@@ -133,6 +133,11 @@ export async function startServer(config: ServerConfig): Promise<Server> {
         startProactiveRefresh();
         tokenGate.startCredentialsWatcher();
         scheduleSelfRestart();
+        // Pool warm was previously a module-import side-effect, which
+        // raced startup verifyAuth for CPU and could SIGTERM the auth
+        // check on a cold container. Kicking it off after listen()
+        // keeps the startup path sequential.
+        startSubprocessPool();
       }
       resolve(serverInstance!);
     });
@@ -143,6 +148,7 @@ export async function stopServer(): Promise<void> {
   if (!serverInstance) return;
   return new Promise<void>((resolve, reject) => {
     stopProactiveRefresh();
+    stopSubprocessPool();
     tokenGate.stopCredentialsWatcher();
     serverInstance!.close((err) => {
       if (err) {

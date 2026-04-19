@@ -138,14 +138,37 @@ class SubprocessPool {
 
 export const subprocessPool = new SubprocessPool();
 
-subprocessPool
-  .warm()
-  .catch((err) => logError("pool.warm_failed", err, { phase: "initial" }));
+let intervalHandle: NodeJS.Timeout | null = null;
 
-setInterval(() => {
-  if (!subprocessPool.isWarm()) {
-    subprocessPool
-      .warm()
-      .catch((err) => logError("pool.warm_failed", err, { phase: "interval" }));
+/**
+ * Start the pool's initial warm + periodic re-warm loop. Idempotent.
+ *
+ * Called from startServer() after the startup verifyAuth has a chance to
+ * run — earlier module-import side-effects were racing verifyAuth for
+ * CPU on cold container boot and timing out the auth check.
+ */
+export function startSubprocessPool(): void {
+  if (intervalHandle) return;
+  subprocessPool
+    .warm()
+    .catch((err) => logError("pool.warm_failed", err, { phase: "initial" }));
+  intervalHandle = setInterval(() => {
+    if (!subprocessPool.isWarm()) {
+      subprocessPool
+        .warm()
+        .catch((err) =>
+          logError("pool.warm_failed", err, { phase: "interval" }),
+        );
+    }
+  }, WARMUP_INTERVAL_MS);
+  if (typeof intervalHandle.unref === "function") {
+    intervalHandle.unref();
   }
-}, WARMUP_INTERVAL_MS);
+}
+
+export function stopSubprocessPool(): void {
+  if (intervalHandle) {
+    clearInterval(intervalHandle);
+    intervalHandle = null;
+  }
+}

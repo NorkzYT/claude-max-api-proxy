@@ -40,22 +40,33 @@ async function main(): Promise<void> {
   console.log(`  Claude CLI: ${cliCheck.version || "OK"}`);
 
   console.log("Checking authentication...");
-  const authCheck = await verifyAuth();
-  if (!authCheck.ok) {
-    // Soft-fail: the container may be booting with an empty private volume
-    // (first run after switching to isolated credentials). Start the server
-    // anyway so the user can `docker exec -it claude-max-proxy claude /login`
-    // — the /health endpoint and model-availability refresh will pick up the
-    // new credentials as soon as the login completes, no restart required.
-    console.warn(`  Authentication: ${authCheck.error}`);
-    console.warn(
-      "  Server will start UNAUTHENTICATED. Run `make auth-claude-proxy`",
-    );
-    console.warn(
-      "  (or `docker exec -it claude-max-proxy claude /login`) to complete setup.\n",
-    );
+  // When CLAUDE_CODE_OAUTH_TOKEN is set, the Claude CLI picks up auth from
+  // env and no credential-file check is meaningful — skip the verifyAuth
+  // subprocess entirely. The startup path is also where Node's event loop
+  // is busiest (module loading, SQLite init, session manager), and a stall
+  // there can SIGTERM the verify spawn before it returns, producing a
+  // misleading "unauthenticated" state. Model-availability will probe
+  // tokens on first use anyway.
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+    console.log("  Authentication: CLAUDE_CODE_OAUTH_TOKEN (skipped verify)\n");
   } else {
-    console.log("  Authentication: OK\n");
+    const authCheck = await verifyAuth();
+    if (!authCheck.ok) {
+      // Soft-fail: container may be booting with an empty private volume
+      // (first run after switching to isolated credentials). Start the
+      // server anyway so the user can `docker exec -it claude-max-proxy
+      // claude /login` — /health and model-availability refresh will pick
+      // up new credentials when they appear, no restart required.
+      console.warn(`  Authentication: ${authCheck.error}`);
+      console.warn(
+        "  Server will start UNAUTHENTICATED. Run `make auth-claude-proxy`",
+      );
+      console.warn(
+        "  (or set CLAUDE_CODE_OAUTH_TOKEN via `claude setup-token`).\n",
+      );
+    } else {
+      console.log("  Authentication: OK\n");
+    }
   }
 
   console.log("Checking model access...");

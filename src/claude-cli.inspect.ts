@@ -24,8 +24,8 @@ const CLEAN_CLAUDE_ENV = (() => {
   return env;
 })();
 
-let cachedClaudeVersion = process.env.CLAUDE_PROXY_CLAUDE_VERSION?.trim()
-  || undefined;
+let cachedClaudeVersion =
+  process.env.CLAUDE_PROXY_CLAUDE_VERSION?.trim() || undefined;
 
 export interface ClaudeCommandResult {
   stdout: string;
@@ -340,11 +340,25 @@ export async function verifyAuth(): Promise<{
   error?: string;
   status?: ClaudeAuthStatus;
 }> {
-  const result = await runClaudeCommand(["auth", "status"], 5000);
+  // Bumped from 5s → 15s. Cold `claude auth status` on first run after a
+  // container start can take 10+ seconds while the CLI initializes state
+  // files and migrations; 5s produced spurious "could not be determined"
+  // responses that then poisoned the 10-minute availability cache.
+  const result = await runClaudeCommand(["auth", "status"], 15000);
   const raw = result.stdout.trim() || result.stderr.trim();
   const status = parseAuthStatus(raw);
 
   if (!status) {
+    // Surface the raw CLI output so operators can see what the CLI actually
+    // said when classification failed — critical for diagnosing silent
+    // auth issues (permissions, TTY buffering, migration noise).
+    console.error(
+      "[verifyAuth] parseAuthStatus failed. exit=%s timedOut=%s stdout=%j stderr=%j",
+      result.code,
+      result.timedOut,
+      result.stdout?.slice(0, 500),
+      result.stderr?.slice(0, 500),
+    );
     return {
       ok: false,
       error: "Claude CLI authentication status could not be determined",
