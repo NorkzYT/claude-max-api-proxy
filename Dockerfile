@@ -6,7 +6,7 @@ FROM node:22-slim
 # and credential state are mounted in at runtime (/home/node/.config/gh and
 # /home/node/.gitconfig) so the container never ships credentials itself.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ca-certificates curl gnupg \
+ && apt-get install -y --no-install-recommends git gosu ca-certificates curl gnupg \
  && mkdir -p /etc/apt/keyrings \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | gpg --dearmor -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
@@ -42,12 +42,18 @@ RUN npm run build && npm prune --omit=dev
 
 # Writable data directory for SQLite DB and session state.
 # chmod 777 so it works regardless of the runtime UID (set via docker-compose `user:`).
-RUN mkdir -p /data && chmod 777 /data
+RUN mkdir -p /data && chmod 777 /data \
+ && mkdir -p /home/node/.claude
 VOLUME /data
 
-# Run as non-root (required: Claude CLI refuses --dangerously-skip-permissions as root)
-USER node
+# Drop-privileges entrypoint: chowns runtime dirs (named volumes mount in
+# root-owned) to $PUID:$PGID and exec's the main process via gosu. Must
+# start as root so the chown can succeed — compose files must NOT set
+# `user:` on this service; pass PUID/PGID as env vars instead.
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 3456
 
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["node", "dist/server/standalone.js"]
