@@ -15,12 +15,19 @@ const definition: ModelDefinition = {
 };
 
 function makeManager(
-  verifyAuthCalls: Array<() => Promise<{ ok: boolean; error?: string; status?: { loggedIn: boolean } }>>,
+  verifyAuthCalls: Array<
+    () => Promise<{
+      ok: boolean;
+      error?: string;
+      status?: { loggedIn: boolean };
+    }>
+  >,
   exits: number[],
 ): ModelAvailabilityManager {
   let idx = 0;
   return new ModelAvailabilityManager({
-    verifyAuth: async () => verifyAuthCalls[Math.min(idx++, verifyAuthCalls.length - 1)](),
+    verifyAuth: async () =>
+      verifyAuthCalls[Math.min(idx++, verifyAuthCalls.length - 1)](),
     probeModelAvailability: async () => ({
       ok: true,
       model: definition.id,
@@ -52,18 +59,25 @@ test("ModelAvailabilityManager cancels a scheduled self-exit after auth recovery
   }
   assert.equal(manager.getConsecutiveAuthFailures(), 5);
 
-  const recovered = (await manager.getSnapshot(true)) as ModelAvailabilitySnapshot;
+  const recovered = (await manager.getSnapshot(
+    true,
+  )) as ModelAvailabilitySnapshot;
   assert.equal(manager.getConsecutiveAuthFailures(), 0);
-  assert.deepEqual(recovered.available.map((model) => model.id), [definition.id]);
+  assert.deepEqual(
+    recovered.available.map((model) => model.id),
+    [definition.id],
+  );
 
   await new Promise((resolve) => setTimeout(resolve, 350));
   assert.deepEqual(exits, []);
 });
 
-test("ModelAvailabilityManager exits after sustained auth failure", async () => {
+test("ModelAvailabilityManager exits after sustained auth failure once it has seen a successful auth", async () => {
   const exits: number[] = [];
   const manager = makeManager(
     [
+      // First arm the self-exit by proving auth worked at least once.
+      async () => ({ ok: true, status: { loggedIn: true } }),
       async () => ({ ok: false, error: "auth failed" }),
       async () => ({ ok: false, error: "auth failed" }),
       async () => ({ ok: false, error: "auth failed" }),
@@ -73,10 +87,33 @@ test("ModelAvailabilityManager exits after sustained auth failure", async () => 
     exits,
   );
 
-  for (let i = 0; i < 5; i++) {
+  // 1 successful auth + 5 failures. Self-exit fires on the 5th failure.
+  for (let i = 0; i < 6; i++) {
     await manager.getSnapshot(true);
   }
 
   await new Promise((resolve) => setTimeout(resolve, 350));
   assert.deepEqual(exits, [1]);
+});
+
+test("ModelAvailabilityManager does NOT exit when it has never been authenticated", async () => {
+  // First-boot scenario: private volume is empty, claude CLI has no
+  // creds, operator needs time to run `make auth-claude-proxy`. A
+  // self-exit loop here would make that impossible.
+  const exits: number[] = [];
+  const manager = makeManager(
+    Array.from({ length: 10 }, () => async () => ({
+      ok: false,
+      error: "auth failed",
+    })),
+    exits,
+  );
+
+  for (let i = 0; i < 10; i++) {
+    await manager.getSnapshot(true);
+  }
+  assert.equal(manager.getConsecutiveAuthFailures(), 10);
+
+  await new Promise((resolve) => setTimeout(resolve, 350));
+  assert.deepEqual(exits, []);
 });

@@ -42,11 +42,21 @@ async function main(): Promise<void> {
   console.log("Checking authentication...");
   const authCheck = await verifyAuth();
   if (!authCheck.ok) {
-    console.error(`Error: ${authCheck.error}`);
-    console.error("Please run: claude auth login");
-    process.exit(1);
+    // Soft-fail: the container may be booting with an empty private volume
+    // (first run after switching to isolated credentials). Start the server
+    // anyway so the user can `docker exec -it claude-max-proxy claude /login`
+    // — the /health endpoint and model-availability refresh will pick up the
+    // new credentials as soon as the login completes, no restart required.
+    console.warn(`  Authentication: ${authCheck.error}`);
+    console.warn(
+      "  Server will start UNAUTHENTICATED. Run `make auth-claude-proxy`",
+    );
+    console.warn(
+      "  (or `docker exec -it claude-max-proxy claude /login`) to complete setup.\n",
+    );
+  } else {
+    console.log("  Authentication: OK\n");
   }
-  console.log("  Authentication: OK\n");
 
   console.log("Checking model access...");
   console.log(`Queue policy: ${runtimeConfig.sameConversationPolicy}`);

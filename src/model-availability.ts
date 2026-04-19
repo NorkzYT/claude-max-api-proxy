@@ -73,6 +73,7 @@ export class ModelAvailabilityManager {
   private lastAuthRetryAt = 0;
   private consecutiveAuthFailures = 0;
   private selfExitTimer: ReturnType<typeof setTimeout> | null = null;
+  private hasEverAuthenticated = false;
 
   constructor(private readonly deps: ModelAvailabilityDeps = defaultDeps) {}
 
@@ -194,7 +195,15 @@ export class ModelAvailabilityManager {
 
     if (!authResult.ok) {
       this.consecutiveAuthFailures += 1;
-      if (this.consecutiveAuthFailures >= AUTH_SELF_EXIT_THRESHOLD) {
+      // Only trigger a self-exit if we've actually been authenticated before.
+      // A container that boots with an empty private credentials volume (e.g.
+      // first run after switching to isolated auth) must stay up long enough
+      // for the operator to run `make auth-claude-proxy`; restarting in a
+      // loop would make that impossible.
+      if (
+        this.hasEverAuthenticated &&
+        this.consecutiveAuthFailures >= AUTH_SELF_EXIT_THRESHOLD
+      ) {
         log("auth.failure", {
           phase: "self_exit",
           consecutiveAuthFailures: this.consecutiveAuthFailures,
@@ -220,6 +229,7 @@ export class ModelAvailabilityManager {
       };
     }
 
+    this.hasEverAuthenticated = true;
     this.consecutiveAuthFailures = 0;
     this.clearSelfExit();
 
