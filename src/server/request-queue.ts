@@ -26,6 +26,7 @@ interface ActiveRequestEntry {
 interface RequestQueueOptions {
   debugQueues?: () => boolean;
   sameConversationPolicy?: () => SameConversationPolicy;
+  maxConcurrent?: number;
   log?: typeof log;
   now?: () => number;
 }
@@ -48,10 +49,14 @@ export class RequestCancelledError extends Error {
 export class ConversationRequestQueue {
   private readonly conversationQueues = new Map<string, QueueEntry>();
   private readonly activeRequests = new Map<string, ActiveRequestEntry>();
+  private readonly readyConversationIds: string[] = [];
+  private readonly readyConversationSet = new Set<string>();
   private readonly now: () => number;
   private readonly writeLog: typeof log;
   private readonly isDebugQueuesEnabled: () => boolean;
   private readonly getSameConversationPolicy: () => SameConversationPolicy;
+  private readonly maxConcurrent: number;
+  private activeHandlers = 0;
 
   constructor(options: RequestQueueOptions = {}) {
     this.now = options.now ?? Date.now;
@@ -61,6 +66,10 @@ export class ConversationRequestQueue {
     this.getSameConversationPolicy =
       options.sameConversationPolicy ??
       (() => runtimeConfig.sameConversationPolicy);
+    this.maxConcurrent = Math.max(
+      1,
+      options.maxConcurrent ?? runtimeConfig.maxConcurrentRequests,
+    );
   }
 
   enqueue(
@@ -120,11 +129,14 @@ export class ConversationRequestQueue {
         requestId,
         depth: entry.queue.length,
         processing: entry.processing,
+        activeHandlers: this.activeHandlers,
+        maxConcurrent: this.maxConcurrent,
         policy: this.getSameConversationPolicy(),
       });
 
       if (!entry.processing) {
-        void this.processQueue(conversationId);
+        this.markConversationReady(conversationId, entry);
+        this.drainQueues();
       }
     });
   }
@@ -196,28 +208,78 @@ export class ConversationRequestQueue {
     return this.activeRequests.size;
   }
 
-  private async processQueue(conversationId: string): Promise<void> {
-    const entry = this.conversationQueues.get(conversationId);
-    if (!entry || entry.queue.length === 0) {
-      if (entry) {
-        entry.processing = false;
-        if (entry.queue.length === 0) {
-          this.conversationQueues.delete(conversationId);
-        }
-      }
+  getMaxConcurrent(): number {
+    return this.maxConcurrent;
+  }
+
+  private markConversationReady(
+    conversationId: string,
+    entry: QueueEntry,
+  ): void {
+    if (
+      entry.processing ||
+      entry.queue.length === 0 ||
+      this.readyConversationSet.has(conversationId)
+    ) {
       return;
     }
+    this.readyConversationSet.add(conversationId);
+    this.readyConversationIds.push(conversationId);
+  }
 
-    entry.processing = true;
-    const item = entry.queue.shift()!;
+  private cleanupConversationEntry(conversationId: string): void {
+    const entry = this.conversationQueues.get(conversationId);
+    if (!entry || entry.processing || entry.queue.length > 0) {
+      return;
+    }
+    this.conversationQueues.delete(conversationId);
+  }
 
+  private drainQueues(): void {
+    while (
+      this.activeHandlers < this.maxConcurrent &&
+      this.readyConversationIds.length > 0
+    ) {
+      const conversationId = this.readyConversationIds.shift()!;
+      this.readyConversationSet.delete(conversationId);
+      const entry = this.conversationQueues.get(conversationId);
+      if (!entry) {
+        continue;
+      }
+      if (entry.processing || entry.queue.length === 0) {
+        this.cleanupConversationEntry(conversationId);
+        continue;
+      }
+
+      entry.processing = true;
+      this.activeHandlers += 1;
+      const item = entry.queue.shift()!;
+      void this.runItem(conversationId, entry, item);
+    }
+  }
+
+  private async runItem(
+    conversationId: string,
+    entry: QueueEntry,
+    item: QueueItem,
+  ): Promise<void> {
     try {
       const result = await item.handler();
       item.resolve(result);
     } catch (error) {
       item.reject(error);
     } finally {
-      void this.processQueue(conversationId);
+      this.activeHandlers = Math.max(0, this.activeHandlers - 1);
+      const current = this.conversationQueues.get(conversationId);
+      if (current === entry) {
+        entry.processing = false;
+        if (entry.queue.length > 0) {
+          this.markConversationReady(conversationId, entry);
+        } else {
+          this.cleanupConversationEntry(conversationId);
+        }
+      }
+      this.drainQueues();
     }
   }
 
@@ -249,6 +311,7 @@ export class ConversationRequestQueue {
     if (!entry || entry.queue.length === 0) return;
 
     const staleItems = entry.queue.splice(0);
+    this.cleanupConversationEntry(conversationId);
     for (const item of staleItems) {
       this.writeLog("queue.drop", {
         conversationId,

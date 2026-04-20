@@ -24,7 +24,9 @@ test("readRuntimeConfig parses booleans", () => {
     enableAdminApi: true,
     defaultThinkingBudget: undefined,
     defaultAgent: undefined,
+    maxConcurrentRequests: config.maxConcurrentRequests,
   });
+  assert.ok(config.maxConcurrentRequests >= 1);
 });
 
 test("readRuntimeConfig reads default thinking budget", () => {
@@ -38,7 +40,9 @@ test("readRuntimeConfig reads default thinking budget", () => {
     enableAdminApi: false,
     defaultThinkingBudget: "high",
     defaultAgent: undefined,
+    maxConcurrentRequests: config.maxConcurrentRequests,
   });
+  assert.ok(config.maxConcurrentRequests >= 1);
 });
 
 test("readRuntimeConfig prefers persisted thinking budget over env", () => {
@@ -55,7 +59,9 @@ test("readRuntimeConfig prefers persisted thinking budget over env", () => {
     enableAdminApi: false,
     defaultThinkingBudget: "low",
     defaultAgent: undefined,
+    maxConcurrentRequests: config.maxConcurrentRequests,
   });
+  assert.ok(config.maxConcurrentRequests >= 1);
 });
 
 test("readRuntimeConfig reads default expert agent", () => {
@@ -72,5 +78,18 @@ test("readRuntimeConfig reads default expert agent", () => {
     enableAdminApi: false,
     defaultThinkingBudget: undefined,
     defaultAgent: "expert-coder",
+    maxConcurrentRequests: config.maxConcurrentRequests,
   });
+  assert.ok(config.maxConcurrentRequests >= 1);
+});
+
+test("readRuntimeConfig reads max concurrent requests override", () => {
+  const config = readRuntimeConfig(
+    {
+      CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS: "7",
+    },
+    undefined,
+  );
+
+  assert.equal(config.maxConcurrentRequests, 7);
 });

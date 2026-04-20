@@ -19,7 +19,7 @@ Platform context:
 - The core surfaces are /v1/chat/completions, /v1/responses, /v1/models, /v1/capabilities, and /health.
 - Models are not hard-coded; they are dynamically resolved from the installed Claude CLI at runtime.
 - Conversation continuity is preserved by mapping OpenAI user values to Claude CLI sessions.
-- Requests are serialized per conversation according to the configured latest-wins or queue policy.
+- Requests are serialized per conversation according to the configured latest-wins or queue policy, with a global concurrency cap across conversations.
 - Every user request ultimately runs through a fresh claude subprocess; the warm-up pool only reduces cold-start latency.
 - Reasoning controls are normalized to Claude CLI effort levels, and newer Sonnet/Opus model lines may require adaptive reasoning semantics.
 - The proxy must remain generic, portable, and open-source friendly: no machine-specific paths, no personal assumptions, Docker optional, local-first defaults, and clear documentation.

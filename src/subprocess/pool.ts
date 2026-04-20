@@ -4,8 +4,7 @@
  * Pre-spawns Claude CLI processes so requests don't pay cold-start cost.
  */
 import { spawn } from "child_process";
-import { getCleanClaudeEnv } from "../claude-cli.inspect.js";
-import { tokenGate } from "../auth/token-gate.js";
+import { getCleanClaudeEnv, prepareClaudeSpawn } from "../claude-cli.inspect.js";
 import { log, logError } from "../logger.js";
 import { createEscalatedStop } from "./stop-with-escalation.js";
 
@@ -72,49 +71,46 @@ class SubprocessPool {
     });
   }
 
-  private warmDeep(): Promise<void> {
-    // warmDeep is auth-touching (spawns `claude --print ...`) so route it
-    // through the token gate. Outside the refresh window this is a no-op;
-    // inside the window it serializes with request-path spawns so only one
-    // subprocess can drive the refresh_token rotation at a time.
-    return tokenGate.runGated<void>(
-      () =>
-        new Promise<void>((resolve) => {
-          try {
-            const proc = spawn(
-              "claude",
-              [
-                "--print",
-                "--output-format",
-                "stream-json",
-                "--model",
-                "haiku",
-                "hi",
-              ],
-              { stdio: "pipe", env: getCleanClaudeEnv() },
-            );
-            const stopper = createEscalatedStop(
-              proc,
-              resolve,
-              WARM_DEEP_KILL_GRACE_MS,
-              WARM_DEEP_FORCE_RELEASE_MS,
-            );
-            const timeoutId = setTimeout(
-              stopper.requestStop,
-              WARM_DEEP_TIMEOUT_MS,
-            );
-            const clearTimeouts = (): void => clearTimeout(timeoutId);
-            proc.once("close", clearTimeouts);
-            proc.once("error", () => {
-              clearTimeouts();
-              stopper.settle();
-            });
-            proc.stdout?.on("data", stopper.requestStop);
-          } catch {
-            resolve();
-          }
-        }),
-    );
+  private async warmDeep(): Promise<void> {
+    // Deep warm touches the request path, so run the refresh preflight first
+    // when the OAuth token is close to expiry. After that, the actual warm
+    // subprocess runs normally without serializing the whole system.
+    await prepareClaudeSpawn();
+    return new Promise<void>((resolve) => {
+      try {
+        const proc = spawn(
+          "claude",
+          [
+            "--print",
+            "--output-format",
+            "stream-json",
+            "--model",
+            "haiku",
+            "hi",
+          ],
+          { stdio: "pipe", env: getCleanClaudeEnv() },
+        );
+        const stopper = createEscalatedStop(
+          proc,
+          resolve,
+          WARM_DEEP_KILL_GRACE_MS,
+          WARM_DEEP_FORCE_RELEASE_MS,
+        );
+        const timeoutId = setTimeout(
+          stopper.requestStop,
+          WARM_DEEP_TIMEOUT_MS,
+        );
+        const clearTimeouts = (): void => clearTimeout(timeoutId);
+        proc.once("close", clearTimeouts);
+        proc.once("error", () => {
+          clearTimeouts();
+          stopper.settle();
+        });
+        proc.stdout?.on("data", stopper.requestStop);
+      } catch {
+        resolve();
+      }
+    });
   }
 
   isWarm(): boolean {

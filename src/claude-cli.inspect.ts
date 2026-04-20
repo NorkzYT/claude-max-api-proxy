@@ -18,6 +18,8 @@ const DEFAULT_COMMAND_TIMEOUT_MS = 10000;
 const PROBE_PROMPT = "Reply with exactly: OK";
 const COMMAND_KILL_GRACE_MS = 5000;
 const COMMAND_FORCE_RELEASE_MS = 1000;
+const SPAWN_PREPARE_TIMEOUT_MS = 30000;
+const SPAWN_PREPARE_ARGS = ["--print", "--output-format", "json", "ok"];
 const XHIGH_MIN_VERSION = { major: 2, minor: 1, patch: 112 } as const;
 const ADAPTIVE_REASONING_MIN_VERSION = { major: 2, minor: 1, patch: 111 } as const;
 
@@ -274,66 +276,73 @@ export function extractClaudeErrorFromResult(
   );
 }
 
+export async function runClaudeCommandRaw(
+  args: string[],
+  timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
+): Promise<ClaudeCommandResult> {
+  return new Promise<ClaudeCommandResult>((resolve) => {
+    const proc = spawn("claude", args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: getCleanClaudeEnv(),
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let code: number | null = null;
+    let signal: NodeJS.Signals | null = null;
+    let settled = false;
+
+    const finalize = (): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      resolve({ stdout, stderr, code, signal, timedOut });
+    };
+
+    proc.on("close", (closeCode, closeSignal) => {
+      code = closeCode;
+      signal = closeSignal;
+    });
+
+    const stopper = createEscalatedStop(
+      proc,
+      finalize,
+      COMMAND_KILL_GRACE_MS,
+      COMMAND_FORCE_RELEASE_MS,
+    );
+
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      stopper.requestStop();
+    }, timeoutMs);
+
+    proc.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+
+    proc.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    proc.on("error", () => {
+      stopper.settle();
+    });
+  });
+}
+
+export async function prepareClaudeSpawn(): Promise<void> {
+  await tokenGate.refreshIfNeeded(async () => {
+    await runClaudeCommandRaw(SPAWN_PREPARE_ARGS, SPAWN_PREPARE_TIMEOUT_MS);
+  });
+}
+
 export async function runClaudeCommand(
   args: string[],
   timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
 ): Promise<ClaudeCommandResult> {
-  // Serialize spawns during the OAuth refresh window so concurrent `claude`
-  // invocations can't race on refresh_token rotation. Outside the window the
-  // gate fast-paths with no overhead. The gated promise resolves on child
-  // EXIT (via close/error) so the mutex is held for the full lifetime.
-  return tokenGate.runGated(
-    () =>
-      new Promise<ClaudeCommandResult>((resolve) => {
-        const proc = spawn("claude", args, {
-          stdio: ["ignore", "pipe", "pipe"],
-          env: getCleanClaudeEnv(),
-        });
-
-        let stdout = "";
-        let stderr = "";
-        let timedOut = false;
-        let code: number | null = null;
-        let signal: NodeJS.Signals | null = null;
-        let settled = false;
-
-        const finalize = (): void => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timeoutId);
-          resolve({ stdout, stderr, code, signal, timedOut });
-        };
-
-        proc.on("close", (closeCode, closeSignal) => {
-          code = closeCode;
-          signal = closeSignal;
-        });
-
-        const stopper = createEscalatedStop(
-          proc,
-          finalize,
-          COMMAND_KILL_GRACE_MS,
-          COMMAND_FORCE_RELEASE_MS,
-        );
-
-        const timeoutId = setTimeout(() => {
-          timedOut = true;
-          stopper.requestStop();
-        }, timeoutMs);
-
-        proc.stdout?.on("data", (chunk: Buffer) => {
-          stdout += chunk.toString();
-        });
-
-        proc.stderr?.on("data", (chunk: Buffer) => {
-          stderr += chunk.toString();
-        });
-
-        proc.on("error", () => {
-          stopper.settle();
-        });
-      }),
-  );
+  await prepareClaudeSpawn();
+  return runClaudeCommandRaw(args, timeoutMs);
 }
 
 export async function verifyClaude(): Promise<{

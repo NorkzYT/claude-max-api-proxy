@@ -157,4 +157,4 @@ These files are **machine-local** and not portable. Moving the repo to another m
 
 ## macOS auto-start
 
-See [docs/macos-setup.md](./macos-setup.md) for the LaunchAgent setup that runs the proxy at login with KeepAlive.
+See [macOS setup](../setup/macos-setup.md) for the LaunchAgent setup that runs the proxy at login with KeepAlive.

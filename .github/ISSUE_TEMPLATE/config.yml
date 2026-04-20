@@ -4,5 +4,5 @@ contact_links:
     url: https://github.com/mattschwen/claude-max-api-proxy/security/policy
     about: Do not file public issues for vulnerabilities.
   - name: Troubleshooting guide
-    url: https://github.com/mattschwen/claude-max-api-proxy/blob/main/docs/TROUBLESHOOTING.md
+    url: https://github.com/mattschwen/claude-max-api-proxy/blob/main/docs/reference/TROUBLESHOOTING.md
     about: Check the setup and runtime fixes before opening an issue.

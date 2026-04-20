@@ -1,6 +1,6 @@
 # Optional Docker Setup
 
-Run the proxy in a container if you want a containerized deployment. Docker is fully optional; the standard source install lives in [README.md](../README.md).
+Run the proxy in a container if you want a containerized deployment. Docker is fully optional; the standard source install lives in [README.md](../../README.md).
 
 The image builds from source, installs the Claude CLI, and runs as a non-root user.
 

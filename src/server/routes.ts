@@ -3,10 +3,10 @@
  *
  * Implements OpenAI-compatible endpoints for local AI tools and SDKs.
  *
- * CONCURRENCY MODEL: Queue-and-Serialize per conversation.
+ * CONCURRENCY MODEL: Per-conversation FIFO plus a global concurrency cap.
  * - Each conversation gets a FIFO queue
  * - Requests for the same conversation are processed according to the configured policy
- * - Different conversations run fully in parallel
+ * - Different conversations can run concurrently up to the configured global cap
  * - Requests end in completion, timeout, or explicit cancellation
  *
  * Reliability improvements:
@@ -591,6 +591,7 @@ export async function handleHealth(
     },
     config: {
       sameConversationPolicy: runtimeConfig.sameConversationPolicy,
+      maxConcurrentRequests: runtimeConfig.maxConcurrentRequests,
       debugQueues: runtimeConfig.debugQueues,
       enableAdminApi: runtimeConfig.enableAdminApi,
       defaultAgent: runtimeConfig.defaultAgent ?? null,

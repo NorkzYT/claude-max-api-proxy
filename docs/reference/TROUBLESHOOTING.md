@@ -203,7 +203,7 @@ lsof -iTCP:3456 -sTCP:LISTEN
 
 The proxy emits one JSON object per line to stdout. To filter for a specific event:
 
-The following examples assume you're running under `launchd` on macOS with the LaunchAgent from [macos-setup.md](./macos-setup.md), which writes logs to `~/Library/Logs/claude-max-api-proxy.log` (and `.err.log`). If you're running in the foreground (`npm start`), substitute stdout/stderr for the tail commands.
+The following examples assume you're running under `launchd` on macOS with the LaunchAgent from [macos-setup.md](../setup/macos-setup.md), which writes logs to `~/Library/Logs/claude-max-api-proxy.log` (and `.err.log`). If you're running in the foreground (`npm start`), substitute stdout/stderr for the tail commands.
 
 ```bash
 # Every request completion

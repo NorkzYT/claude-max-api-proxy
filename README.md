@@ -40,11 +40,11 @@
   <a href="#systems-online">Systems</a> ·
   <a href="#jack-in">Jack In</a> ·
   <a href="#plug-in-any-openai-client">Clients</a> ·
-  <a href="./docs/API.md">API</a> ·
-  <a href="./docs/CONFIGURATION.md">Config</a> ·
-  <a href="./docs/CODEBASE_INDEX.md">Code Index</a> ·
-  <a href="./docs/ARCHITECTURE.md">Architecture</a> ·
-  <a href="./docs/TROUBLESHOOTING.md">Troubleshooting</a>
+  <a href="./docs/reference/API.md">API</a> ·
+  <a href="./docs/reference/CONFIGURATION.md">Config</a> ·
+  <a href="./docs/reference/CODEBASE_INDEX.md">Code Index</a> ·
+  <a href="./docs/reference/ARCHITECTURE.md">Architecture</a> ·
+  <a href="./docs/reference/TROUBLESHOOTING.md">Troubleshooting</a>
 </p>
 
 </div>
@@ -145,10 +145,10 @@ curl http://127.0.0.1:3456/v1/agents
 > [!IMPORTANT]
 > If `/v1/models` returns `{"object":"list","data":[]}`, the proxy started but
 > your Claude CLI account cannot access any models right now. Fix auth first.
-> See [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md).
+> See [docs/reference/TROUBLESHOOTING.md](./docs/reference/TROUBLESHOOTING.md).
 
 > [!NOTE]
-> Prefer containers? See [docs/docker-setup.md](./docs/docker-setup.md). Docker
+> Prefer containers? See [docs/setup/docker-setup.md](./docs/setup/docker-setup.md). Docker
 > is supported, but not required.
 
 ## Plug In Any OpenAI Client
@@ -281,7 +281,7 @@ export CLAUDE_PROXY_DEFAULT_AGENT=expert-coder
 ## Configuration
 
 Everything is environment-variable driven. The full reference lives in
-[docs/CONFIGURATION.md](./docs/CONFIGURATION.md).
+[docs/reference/CONFIGURATION.md](./docs/reference/CONFIGURATION.md).
 
 ```bash
 # Cancel the in-flight request when a newer one lands for the same conversation
@@ -301,24 +301,24 @@ npm start
 
 ## Run It Like Infrastructure
 
-- **macOS**: [docs/macos-setup.md](./docs/macos-setup.md)
-- **Linux**: [docs/linux-systemd.md](./docs/linux-systemd.md)
-- **Docker**: [docs/docker-setup.md](./docs/docker-setup.md)
+- **macOS**: [docs/setup/macos-setup.md](./docs/setup/macos-setup.md)
+- **Linux**: [docs/setup/linux-systemd.md](./docs/setup/linux-systemd.md)
+- **Docker**: [docs/setup/docker-setup.md](./docs/setup/docker-setup.md)
 
 ## Documentation
 
 | Document | What's inside |
 | --- | --- |
-| [docs/API.md](./docs/API.md) | Full endpoint reference, request and response shapes, and examples |
-| [docs/CONFIGURATION.md](./docs/CONFIGURATION.md) | Environment variables, defaults, and runtime policies |
-| [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) | Process model, queues, sessions, probes, and logging |
-| [docs/TROUBLESHOOTING.md](./docs/TROUBLESHOOTING.md) | Failure modes, diagnosis, and repair steps |
-| [docs/macos-setup.md](./docs/macos-setup.md) | LaunchAgent setup for automatic startup on macOS |
-| [docs/linux-systemd.md](./docs/linux-systemd.md) | systemd user-service setup on Linux |
-| [docs/docker-setup.md](./docs/docker-setup.md) | Optional container deployment and Compose setup |
-| [docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md) | Dev setup, style, tests, and PR flow |
-| [docs/CODE_OF_CONDUCT.md](./docs/CODE_OF_CONDUCT.md) | Community expectations |
-| [docs/SECURITY.md](./docs/SECURITY.md) | Private vulnerability reporting |
+| [docs/reference/API.md](./docs/reference/API.md) | Full endpoint reference, request and response shapes, and examples |
+| [docs/reference/CONFIGURATION.md](./docs/reference/CONFIGURATION.md) | Environment variables, defaults, and runtime policies |
+| [docs/reference/ARCHITECTURE.md](./docs/reference/ARCHITECTURE.md) | Process model, queues, sessions, probes, and logging |
+| [docs/reference/TROUBLESHOOTING.md](./docs/reference/TROUBLESHOOTING.md) | Failure modes, diagnosis, and repair steps |
+| [docs/setup/macos-setup.md](./docs/setup/macos-setup.md) | LaunchAgent setup for automatic startup on macOS |
+| [docs/setup/linux-systemd.md](./docs/setup/linux-systemd.md) | systemd user-service setup on Linux |
+| [docs/setup/docker-setup.md](./docs/setup/docker-setup.md) | Optional container deployment and Compose setup |
+| [docs/community/CONTRIBUTING.md](./docs/community/CONTRIBUTING.md) | Dev setup, style, tests, and PR flow |
+| [docs/community/CODE_OF_CONDUCT.md](./docs/community/CODE_OF_CONDUCT.md) | Community expectations |
+| [docs/community/SECURITY.md](./docs/community/SECURITY.md) | Private vulnerability reporting |
 
 ## Compare the Options
 
@@ -356,9 +356,9 @@ their compiled `dist/**/*.test.js` output.
 ## Community
 
 Issues and pull requests are welcome. Read
-[docs/CONTRIBUTING.md](./docs/CONTRIBUTING.md) before opening a PR, use the
+[docs/community/CONTRIBUTING.md](./docs/community/CONTRIBUTING.md) before opening a PR, use the
 issue templates when they apply, and follow the expectations in
-[docs/CODE_OF_CONDUCT.md](./docs/CODE_OF_CONDUCT.md).
+[docs/community/CODE_OF_CONDUCT.md](./docs/community/CODE_OF_CONDUCT.md).
 
 ## Security
 
@@ -368,7 +368,7 @@ can spend your Claude Max quota.
 
 Keep it on localhost unless you deliberately place it behind real network
 controls, and leave the optional admin API disabled unless you explicitly need
-it. See [docs/SECURITY.md](./docs/SECURITY.md) for responsible disclosure.
+it. See [docs/community/SECURITY.md](./docs/community/SECURITY.md) for responsible disclosure.
 
 ## License
 

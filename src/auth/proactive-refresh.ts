@@ -7,14 +7,16 @@
  * drives a fresh refresh while the proxy is otherwise idle. This shrinks
  * the window where a bursty Discord workload could race on the refresh.
  *
- * - Uses `runClaudeCommand` so the call is already gated.
+ * - Uses `runClaudeCommandRaw` because this lightweight print itself is the
+ *   refresh preflight; wrapping it in another preflight would just do the work
+ *   twice.
  * - Idempotent start/stop so callers can guard against double-starts.
  * - Explicitly NOT started in unit tests; only `startServer` kicks it off.
  */
 import fs from "node:fs";
 import path from "node:path";
 import { log, logError } from "../logger.js";
-import { runClaudeCommand } from "../claude-cli.inspect.js";
+import { runClaudeCommandRaw } from "../claude-cli.inspect.js";
 
 const REFRESH_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const REFRESH_WHEN_WITHIN_MS = 2 * 60 * 60 * 1000; // 2 hours
@@ -55,8 +57,8 @@ export async function runProactiveRefreshTick(
   if (msUntilExpiry > REFRESH_WHEN_WITHIN_MS) return;
 
   try {
-    const result = await runClaudeCommand(
-      ["--print", "--model", "haiku", "--output-format", "json", "ok"],
+    const result = await runClaudeCommandRaw(
+      ["--print", "--output-format", "json", "ok"],
       PROACTIVE_CALL_TIMEOUT_MS,
     );
     log("auth.proactive_refresh", {

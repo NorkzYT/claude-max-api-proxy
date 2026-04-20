@@ -15,87 +15,75 @@ function makeTempCredsPath(suffix: string): string {
   return path.join(dir, ".credentials.json");
 }
 
-test("TokenGate: fast-paths (runs concurrently) outside refresh window", async () => {
+test("TokenGate: fast-paths outside refresh window", async () => {
   const credsPath = makeTempCredsPath("outside");
-  // expiresAt 1h in the future; window is [-30min, +5min], so we are WAY
-  // outside it and the gate should not serialize.
   const now = 1_000_000_000_000;
   writeCreds(credsPath, now + 60 * 60 * 1000);
 
   const gate = new TokenGate({
     credentialsPath: credsPath,
     now: () => now,
+    cooldownMs: 0,
   });
   assert.equal(gate.isInRefreshWindow(), false);
 
-  const started: number[] = [];
-  const finished: number[] = [];
-  const slow = async (id: number): Promise<number> => {
-    started.push(id);
-    await new Promise((r) => setTimeout(r, 20));
-    finished.push(id);
-    return id;
-  };
+  let refreshCalls = 0;
+  const waited = await gate.refreshIfNeeded(async () => {
+    refreshCalls += 1;
+  });
 
-  const results = await Promise.all([
-    gate.runGated(() => slow(1)),
-    gate.runGated(() => slow(2)),
-    gate.runGated(() => slow(3)),
-  ]);
-
-  assert.deepEqual(results.sort(), [1, 2, 3]);
-  // All three should have started before any finished (parallel, not serial).
-  assert.equal(started.length, 3);
-  assert.ok(
-    started[0] !== undefined &&
-      started[1] !== undefined &&
-      started[2] !== undefined,
-  );
-  // We can't assert exact ordering of `finished` vs `started`, but we can
-  // assert that all three entered the `slow` body before the first finished
-  // — which is only possible if they ran concurrently.
-  assert.equal(
-    started.length,
-    3,
-    "all three concurrent calls entered the critical section",
-  );
+  assert.equal(waited, false);
+  assert.equal(refreshCalls, 0);
 });
 
-test("TokenGate: serializes concurrent calls inside refresh window", async () => {
+test("TokenGate: shares a single refresh across concurrent callers", async () => {
   const credsPath = makeTempCredsPath("inside");
-  // Put `now` 2 minutes BEFORE expiresAt, which is inside the default
-  // [expiresAt - 30min, expiresAt + 5min] refresh window.
   const now = 1_000_000_000_000;
   writeCreds(credsPath, now + 2 * 60 * 1000);
 
   const gate = new TokenGate({
     credentialsPath: credsPath,
     now: () => now,
+    cooldownMs: 0,
   });
   assert.equal(gate.isInRefreshWindow(), true);
 
-  const events: Array<{ id: number; kind: "enter" | "exit" }> = [];
-  const slow = async (id: number): Promise<void> => {
-    events.push({ id, kind: "enter" });
-    await new Promise((r) => setTimeout(r, 15));
-    events.push({ id, kind: "exit" });
+  let refreshCalls = 0;
+  let releaseRefresh!: () => void;
+  const refreshBlocked = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  const entered: number[] = [];
+  const finished: number[] = [];
+  let startedBeforeFirstFinish = 0;
+
+  const refresh = async (): Promise<void> => {
+    refreshCalls += 1;
+    await refreshBlocked;
   };
 
-  await Promise.all([
-    gate.runGated(() => slow(1)),
-    gate.runGated(() => slow(2)),
-    gate.runGated(() => slow(3)),
-  ]);
+  const runWork = async (id: number): Promise<void> => {
+    await gate.refreshIfNeeded(refresh);
+    entered.push(id);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    if (finished.length === 0) {
+      startedBeforeFirstFinish = entered.length;
+    }
+    finished.push(id);
+  };
 
-  // Each id must appear as enter -> exit BEFORE the next id's enter.
-  assert.deepEqual(events, [
-    { id: 1, kind: "enter" },
-    { id: 1, kind: "exit" },
-    { id: 2, kind: "enter" },
-    { id: 2, kind: "exit" },
-    { id: 3, kind: "enter" },
-    { id: 3, kind: "exit" },
-  ]);
+  const calls = [runWork(1), runWork(2), runWork(3)];
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(refreshCalls, 1);
+  assert.deepEqual(entered, []);
+
+  releaseRefresh();
+  await Promise.all(calls);
+
+  assert.equal(refreshCalls, 1);
+  assert.equal(startedBeforeFirstFinish, 3);
+  assert.deepEqual(finished.sort(), [1, 2, 3]);
 });
 
 test("TokenGate: fast-paths when credentials file is missing", async () => {
@@ -104,47 +92,78 @@ test("TokenGate: fast-paths when credentials file is missing", async () => {
     "token-gate-nonexistent",
     ".credentials.json",
   );
-  // Ensure it really doesn't exist.
   try {
     fs.unlinkSync(credsPath);
   } catch {
     /* noop */
   }
+
   const gate = new TokenGate({ credentialsPath: credsPath });
   assert.equal(gate.isInRefreshWindow(), false);
-
-  const v = await gate.runGated(async () => 42);
-  assert.equal(v, 42);
+  const waited = await gate.refreshIfNeeded(async () => {});
+  assert.equal(waited, false);
 });
 
 test("TokenGate: fast-paths on malformed credentials file", async () => {
   const credsPath = makeTempCredsPath("malformed");
   fs.writeFileSync(credsPath, "not json at all");
   const gate = new TokenGate({ credentialsPath: credsPath });
-  assert.equal(gate.isInRefreshWindow(), false);
 
-  const v = await gate.runGated(async () => "ok");
-  assert.equal(v, "ok");
+  assert.equal(gate.isInRefreshWindow(), false);
+  const waited = await gate.refreshIfNeeded(async () => {});
+  assert.equal(waited, false);
 });
 
-test("TokenGate: releases the mutex even when fn throws", async () => {
+test("TokenGate: clears the in-flight refresh after an error", async () => {
   const credsPath = makeTempCredsPath("throws");
   const now = 1_000_000_000_000;
-  writeCreds(credsPath, now + 60 * 1000); // inside window
+  writeCreds(credsPath, now + 60 * 1000);
 
   const gate = new TokenGate({
     credentialsPath: credsPath,
     now: () => now,
+    cooldownMs: 0,
   });
 
   await assert.rejects(
-    gate.runGated(async () => {
+    gate.refreshIfNeeded(async () => {
       throw new Error("boom");
     }),
     /boom/,
   );
 
-  // Next call should proceed (mutex was released).
-  const v = await gate.runGated(async () => "after");
-  assert.equal(v, "after");
+  let calls = 0;
+  const waited = await gate.refreshIfNeeded(async () => {
+    calls += 1;
+  });
+  assert.equal(waited, true);
+  assert.equal(calls, 1);
+});
+
+test("TokenGate: respects the refresh cooldown inside the window", async () => {
+  const credsPath = makeTempCredsPath("cooldown");
+  let now = 1_000_000_000_000;
+  writeCreds(credsPath, now + 60 * 1000);
+
+  const gate = new TokenGate({
+    credentialsPath: credsPath,
+    now: () => now,
+    cooldownMs: 60_000,
+  });
+
+  let calls = 0;
+  await gate.refreshIfNeeded(async () => {
+    calls += 1;
+  });
+  await gate.refreshIfNeeded(async () => {
+    calls += 1;
+  });
+
+  assert.equal(calls, 1);
+
+  now += 60_001;
+  await gate.refreshIfNeeded(async () => {
+    calls += 1;
+  });
+  assert.equal(calls, 2);
 });

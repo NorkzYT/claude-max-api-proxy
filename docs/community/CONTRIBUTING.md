@@ -53,8 +53,8 @@ The server binds to `http://127.0.0.1:3456`.
    ```
 2. Make your changes in `src/`. `dist/` is a build artifact — don't hand-edit it.
 3. Run the local check suite: `npm run ci`
-4. Exercise the change manually with `curl` against a running server when behavior changes (see examples in [`API.md`](./API.md)).
-5. If you change setup, configuration, or deployment behavior, update the affected docs in the same PR (`README.md`, `docs/*`, `.env.example`, and any GitHub templates/workflows).
+4. Exercise the change manually with `curl` against a running server when behavior changes (see examples in [`API.md`](../reference/API.md)).
+5. If you change setup, configuration, or deployment behavior, update the affected docs in the same PR (`README.md`, `docs/**`, `.env.example`, and any GitHub templates/workflows).
 6. Commit with a descriptive message (see [commit messages](#commit-messages)).
 7. Push and open a PR. GitHub Actions runs the same build-and-test checks on pushes and pull requests.
 
@@ -75,7 +75,7 @@ Prefer the conventional-commits style:
 ```
 fix(subprocess): bypass third-party classifier by embedding system prompt
 feat(health): expose pool.warmedAt in /health payload
-docs(readme): split API reference into docs/API.md
+docs(reference): split API reference into docs/reference/API.md
 chore(gitignore): add common OSS ignores
 ```
 
@@ -116,7 +116,7 @@ Please include:
 - Operating system and version
 - Exact reproduction steps
 - Full error messages, including stack traces
-- Relevant log excerpts (filter for your `conversationId` — see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md#log-diving))
+- Relevant log excerpts (filter for your `conversationId` — see [TROUBLESHOOTING.md](../reference/TROUBLESHOOTING.md#log-diving))
 - `/health` payload at time of the bug (redact email / org name if you prefer)
 
 ## Security issues

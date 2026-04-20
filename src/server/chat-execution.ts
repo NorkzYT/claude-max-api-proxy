@@ -527,30 +527,32 @@ function runStreamingSubprocess(opts: StreamOpts): Promise<{
       }
     });
 
-    subprocess.start(cliInput.prompt, {
-      model: cliInput.model,
-      sessionId: cliInput.sessionId,
-      systemPrompt: cliInput.systemPrompt,
-      isResume: cliInput.isResume,
-      thinkingBudget: cliInput.thinkingBudget,
-      thinkingEffort: cliInput.thinkingEffort,
-      reasoningMode: cliInput.reasoningMode,
-    }).catch((error: Error) => {
-      logError("request.error", error, {
-        requestId,
-        reason: "subprocess_start_failed",
+    if (!isComplete) {
+      subprocess.start(cliInput.prompt, {
+        model: cliInput.model,
+        sessionId: cliInput.sessionId,
+        systemPrompt: cliInput.systemPrompt,
+        isResume: cliInput.isResume,
+        thinkingBudget: cliInput.thinkingBudget,
+        thinkingEffort: cliInput.thinkingEffort,
+        reasoningMode: cliInput.reasoningMode,
+      }).catch((error: Error) => {
+        logError("request.error", error, {
+          requestId,
+          reason: "subprocess_start_failed",
+        });
+        if (!clientDisconnected && !res.writableEnded) {
+          res.write(
+            `data: ${JSON.stringify({
+              error: { message: error.message, type: "server_error", code: null },
+            })}\n\n`,
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+        }
+        finish(false);
       });
-      if (!clientDisconnected && !res.writableEnded) {
-        res.write(
-          `data: ${JSON.stringify({
-            error: { message: error.message, type: "server_error", code: null },
-          })}\n\n`,
-        );
-        res.write("data: [DONE]\n\n");
-        res.end();
-      }
-      finish(false);
-    });
+    }
   });
 }
 
@@ -794,23 +796,26 @@ async function runNonStreamingSubprocess(
       done();
     });
 
-    subprocess.start(cliInput.prompt, {
-      model: cliInput.model,
-      sessionId: cliInput.sessionId,
-      systemPrompt: cliInput.systemPrompt,
-      isResume: cliInput.isResume,
-      thinkingBudget: cliInput.thinkingBudget,
-      thinkingEffort: cliInput.thinkingEffort,
-      reasoningMode: cliInput.reasoningMode,
-    }).catch((error: Error) => {
-      cleanup.runAll();
-      if (!res.headersSent) {
-        res.status(500).json({
-          error: { message: error.message, type: "server_error", code: null },
-        });
-      }
-      done();
-    });
+    if (!isComplete) {
+      subprocess.start(cliInput.prompt, {
+        model: cliInput.model,
+        sessionId: cliInput.sessionId,
+        systemPrompt: cliInput.systemPrompt,
+        isResume: cliInput.isResume,
+        thinkingBudget: cliInput.thinkingBudget,
+        thinkingEffort: cliInput.thinkingEffort,
+        reasoningMode: cliInput.reasoningMode,
+      }).catch((error: Error) => {
+        isComplete = true;
+        cleanup.runAll();
+        if (!res.headersSent) {
+          res.status(500).json({
+            error: { message: error.message, type: "server_error", code: null },
+          });
+        }
+        done();
+      });
+    }
   });
 }
 

@@ -11,10 +11,11 @@ const noopLog = (
   _fields: Omit<LogEntry, "ts" | "event"> = {},
 ): void => {};
 
-function createQueue(): ConversationRequestQueue {
+function createQueue(maxConcurrent = 4): ConversationRequestQueue {
   return new ConversationRequestQueue({
     debugQueues: () => false,
     sameConversationPolicy: () => "latest-wins",
+    maxConcurrent,
     log: noopLog,
   });
 }
@@ -138,5 +139,56 @@ test(
     active.clear();
 
     assert.equal(deliveredCode, "request_superseded");
+  },
+);
+
+test(
+  "ConversationRequestQueue enforces a global concurrency cap across conversations",
+  async () => {
+    const queue = createQueue(1);
+    const order: string[] = [];
+
+    let releaseFirst!: () => void;
+    const firstBlocked = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStartedResolve!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      firstStartedResolve = resolve;
+    });
+
+    const first = queue.enqueue(
+      "conv-a",
+      "req-a",
+      async () => {
+        order.push("a:start");
+        firstStartedResolve();
+        await firstBlocked;
+        order.push("a:end");
+      },
+      1000,
+    );
+
+    await firstStarted;
+
+    let secondStarted = false;
+    const second = queue.enqueue(
+      "conv-b",
+      "req-b",
+      async () => {
+        secondStarted = true;
+        order.push("b:start");
+      },
+      1000,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(secondStarted, false);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    assert.deepEqual(order, ["a:start", "a:end", "b:start"]);
+    assert.equal(queue.getMaxConcurrent(), 1);
   },
 );

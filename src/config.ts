@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export type SameConversationPolicy = "latest-wins" | "queue";
@@ -14,11 +15,27 @@ function parseBoolean(
   return defaultValue;
 }
 
+function parsePositiveInt(
+  value: string | undefined,
+  defaultValue: number,
+): number {
+  if (value == null || value.trim() === "") return defaultValue;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultValue;
+}
+
 export function parseSameConversationPolicy(
   value: string | undefined,
 ): SameConversationPolicy {
   const normalized = value?.trim().toLowerCase();
   return normalized === "queue" ? "queue" : "latest-wins";
+}
+
+function defaultMaxConcurrentRequests(): number {
+  const parallelism = typeof os.availableParallelism === "function"
+    ? os.availableParallelism()
+    : os.cpus().length;
+  return Math.max(2, Math.min(8, Math.ceil(parallelism * 0.75)));
 }
 
 export interface ProxyRuntimeConfig {
@@ -27,6 +44,7 @@ export interface ProxyRuntimeConfig {
   enableAdminApi: boolean;
   defaultThinkingBudget: string | undefined;
   defaultAgent: string | undefined;
+  maxConcurrentRequests: number;
 }
 
 // Where runtime-mutable state (the admin-endpoint thinking budget override)
@@ -80,6 +98,10 @@ export function readRuntimeConfig(
     enableAdminApi: parseBoolean(env.CLAUDE_PROXY_ENABLE_ADMIN_API, false),
     defaultThinkingBudget: persistedDefault ?? envDefault,
     defaultAgent: env.CLAUDE_PROXY_DEFAULT_AGENT?.trim() || undefined,
+    maxConcurrentRequests: parsePositiveInt(
+      env.CLAUDE_PROXY_MAX_CONCURRENT_REQUESTS,
+      defaultMaxConcurrentRequests(),
+    ),
   };
 }
 

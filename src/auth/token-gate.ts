@@ -1,5 +1,5 @@
 /**
- * Token Gate: serialize `claude` CLI spawns around the OAuth refresh window.
+ * Token Gate: coordinate a single refresh preflight around the OAuth window.
  *
  * Background
  * ----------
@@ -15,9 +15,11 @@
  *
  * Design
  * ------
- * - Exposes `runGated(fn)` that runs `fn()` through a promise-chained mutex
+ * - Exposes `refreshIfNeeded(refresh)` that runs a single refresh preflight
  *   ONLY when `now` falls inside `[expiresAt - 30min, expiresAt + 5min]`.
- * - Outside that window we take the fast path (no serialization overhead).
+ * - Concurrent callers inside that window share one in-flight refresh promise
+ *   instead of serializing the full request/subprocess lifetime.
+ * - Outside that window we take the fast path (no coordination overhead).
  * - Credentials file is re-read on every call so refreshes performed by the
  *   CLI are visible immediately.
  * - Missing / malformed credentials file → fast path (fail-open to avoid
@@ -28,6 +30,7 @@ import path from "node:path";
 
 const REFRESH_LEAD_MS = 30 * 60 * 1000; // 30 minutes before expiry
 const REFRESH_TAIL_MS = 5 * 60 * 1000; // 5 minutes after expiry (grace)
+const REFRESH_COOLDOWN_MS = 60 * 1000; // at most one preflight per minute
 
 interface ClaudeCredentials {
   claudeAiOauth?: {
@@ -39,14 +42,17 @@ export interface TokenGateOptions {
   credentialsPath?: string;
   leadMs?: number;
   tailMs?: number;
+  cooldownMs?: number;
   now?: () => number;
 }
 
 export class TokenGate {
-  private mutex: Promise<void> = Promise.resolve();
+  private refreshPromise: Promise<void> | null = null;
+  private lastRefreshAt = 0;
   private readonly credentialsPath: string;
   private readonly leadMs: number;
   private readonly tailMs: number;
+  private readonly cooldownMs: number;
   private readonly now: () => number;
 
   constructor(options: TokenGateOptions = {}) {
@@ -55,6 +61,7 @@ export class TokenGate {
       path.join(process.env.HOME || "/tmp", ".claude", ".credentials.json");
     this.leadMs = options.leadMs ?? REFRESH_LEAD_MS;
     this.tailMs = options.tailMs ?? REFRESH_TAIL_MS;
+    this.cooldownMs = options.cooldownMs ?? REFRESH_COOLDOWN_MS;
     this.now = options.now ?? Date.now;
   }
 
@@ -86,33 +93,43 @@ export class TokenGate {
   }
 
   /**
-   * Run `fn` with token-refresh serialization applied only when necessary.
+   * Run a shared refresh preflight only when the current credentials are
+   * inside the risky refresh window.
    *
-   * Inside the refresh window: queue behind the previous gated call via a
-   * promise-chained mutex so only one `claude` subprocess can drive a
-   * refresh at a time. The mutex is held for the ENTIRE lifetime of `fn`
-   * (including any streaming subprocess) so a refresh that starts at spawn
-   * time can finish before the next subprocess begins.
-   *
-   * Outside the window: fast-path — invoke `fn` directly.
+   * Returns `true` when the caller entered or waited on the refresh path.
+   * Returns `false` on the normal fast path outside the refresh window.
    */
-  async runGated<T>(fn: () => Promise<T>): Promise<T> {
+  async refreshIfNeeded(refresh: () => Promise<void>): Promise<boolean> {
     if (!this.isInRefreshWindow()) {
-      return fn();
+      return false;
     }
 
-    const prev = this.mutex;
-    let release!: () => void;
-    this.mutex = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-
-    try {
-      await prev;
-      return await fn();
-    } finally {
-      release();
+    if (!this.refreshPromise) {
+      const now = this.now();
+      if (now - this.lastRefreshAt < this.cooldownMs) {
+        return true;
+      }
+      this.lastRefreshAt = now;
+      const refreshPromise = (async () => {
+        await refresh();
+      })();
+      this.refreshPromise = refreshPromise;
+      refreshPromise.then(
+        () => {
+          if (this.refreshPromise === refreshPromise) {
+            this.refreshPromise = null;
+          }
+        },
+        () => {
+          if (this.refreshPromise === refreshPromise) {
+            this.refreshPromise = null;
+          }
+        },
+      );
     }
+
+    await this.refreshPromise;
+    return true;
   }
 }
 
