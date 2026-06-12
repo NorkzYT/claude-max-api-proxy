@@ -28,6 +28,7 @@ import {
 } from "./ops-dashboard.js";
 import { handleLauncher } from "./launcher.js";
 import { runtimeConfig } from "../config.js";
+import { resolveServerTimeouts } from "../timeouts.js";
 import { httpMetricsMiddleware } from "../observability/metrics.js";
 import {
   startProactiveRefresh,
@@ -177,6 +178,16 @@ export async function startServer(config: ServerConfig): Promise<Server> {
   const app = createApp();
   return new Promise<Server>((resolve, reject) => {
     serverInstance = createServer(app);
+
+    // Apply explicit socket timeouts. Without this the server inherits Node's
+    // default `requestTimeout` of 300000ms (5 min), which can sever a long
+    // streaming/"thinking" response mid-flight. Defaults disable requestTimeout
+    // and use generous header/keep-alive values; all are env-tunable via
+    // CLAUDE_PROXY_SERVER_* (see src/timeouts.ts).
+    const serverTimeouts = resolveServerTimeouts();
+    serverInstance.requestTimeout = serverTimeouts.requestTimeoutMs;
+    serverInstance.headersTimeout = serverTimeouts.headersTimeoutMs;
+    serverInstance.keepAliveTimeout = serverTimeouts.keepAliveTimeoutMs;
 
     serverInstance.on("connection", (socket: Socket) => {
       socket.setNoDelay(true);
