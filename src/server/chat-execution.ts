@@ -13,7 +13,7 @@ import {
 } from "../claude-cli.inspect.js";
 import { log, logError } from "../logger.js";
 import { modelAvailability } from "../model-availability.js";
-import { getModelTimeout, getStallTimeout } from "../models.js";
+import { resolveHardTimeout, resolveStallTimeout } from "../timeouts.js";
 import { sessionManager } from "../session/manager.js";
 import { conversationStore } from "../store/conversation.js";
 import { ClaudeSubprocess } from "../subprocess/manager.js";
@@ -151,11 +151,9 @@ function runStreamingSubprocess(opts: StreamOpts): Promise<{
   const { cliInput, requestId, res, onStall, registerCancel, allowAuthRetry } =
     opts;
 
-  const baseTimeout = getModelTimeout(cliInput.model);
-  const hardTimeout = hasActiveReasoning(cliInput) ? baseTimeout * 3 : baseTimeout;
-  const stallTimeout = hasActiveReasoning(cliInput)
-    ? getStallTimeout(cliInput.model) * 3
-    : getStallTimeout(cliInput.model);
+  const reasoning = hasActiveReasoning(cliInput);
+  const hardTimeout = resolveHardTimeout(cliInput.model, reasoning);
+  const stallTimeout = resolveStallTimeout(cliInput.model, reasoning);
 
   return new Promise<{
     fullResponse: string;
@@ -639,8 +637,10 @@ async function runNonStreamingSubprocess(
     | undefined,
   allowAuthRetry: boolean,
 ): Promise<{ authErrored: boolean }> {
-  const baseTimeout = getModelTimeout(cliInput.model);
-  const timeout = hasActiveReasoning(cliInput) ? baseTimeout * 3 : baseTimeout;
+  const timeout = resolveHardTimeout(
+    cliInput.model,
+    hasActiveReasoning(cliInput),
+  );
 
   return new Promise<{ authErrored: boolean }>((resolve) => {
     let authErrored = false;
